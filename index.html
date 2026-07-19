@@ -1173,23 +1173,44 @@ function fmtStripVal(k, netD){
   const a = Math.abs(netD);
   return (netD < 0 ? '−' : '') + (a >= 0.95e9 ? (a/1e9).toFixed(1)+'b' : Math.round(a/1e6)+'m');
 }
-/* the ladder as displayed at any minute — $ values (geometry & levels basis) */
+/* the ladder as displayed at any minute — $ values (geometry & levels basis)
+   Replay days: the strip is ALWAYS the real UW per-strike ladder (signed —
+   calls +, puts −, negatives stay negative). 'live' mode reprices each
+   strike's gamma at the current spot/time and then tilts the call/put sides
+   so the total tracks UW's recorded per-minute net GEX (spot-exposures 1-min
+   series stored in Supabase). Signs per strike are never forced. */
 function stripProfile(minute){
-  if (DAY.realLadder && ladderMode === 'snap')
-    return DAY.realLadder.map(r => ({ k: r[0], cGex: r[1] || 0, pGex: r[2] || 0, cOI: 1, pOI: 1 }));
+  if (DAY.realLadder){
+    let base = DAY.realLadder.map(r => ({ k: r[0], cGex: r[1] || 0, pGex: r[2] || 0, cOI: 1, pOI: 1 }));
+    if (ladderMode !== 'snap'){
+      // reprice: weight the morning ladder by Γ(spot now)/Γ(open) per strike
+      const T = Math.max((390 - minute)/E.YEAR_MIN, 1e-8);
+      const S = DAY.S[minute], S0 = DAY.S[0];
+      const iv = (DAY.iv && DAY.iv[minute]) || DAY.sc.ivOpen;
+      const iv0 = DAY.sc.ivOpen;
+      base = base.map(r => {
+        const g0 = E.bs(S0, r.k, E.T0, iv0, true).gamma;
+        const g1 = E.bs(S, r.k, T, iv, true).gamma;
+        const w = (g0 > 0 && isFinite(g1)) ? Math.min(6, g1/g0) : 1;
+        return { ...r, cGex: r.cGex*w, pGex: r.pGex*w };
+      });
+      // anchor the total to the recorded per-minute net GEX (real, signed)
+      const rec = DAY.realNet ? DAY.realNet[minute] : null;
+      if (rec != null && isFinite(rec)){
+        let C = 0, P = 0;
+        for (const r of base){ C += r.cGex; P += r.pGex; }
+        const span = C - P;                    // C ≥ 0, P ≤ 0 → span ≥ 0
+        if (span > 0){
+          const d = Math.max(-0.9, Math.min(0.9, (rec - (C + P))/span));
+          base = base.map(r => ({ ...r, cGex: r.cGex*(1 + d), pGex: r.pGex*(1 - d) }));
+        }
+      }
+    }
+    return base;
+  }
   const T = Math.max((390 - minute)/E.YEAR_MIN, 1e-8);
   DAY.sc.chain.ivNow = DAY.iv[minute];
-  let rows = E.gexProfile(DAY.sc.chain, DAY.S[minute], T, false);
-  if (DAY.realLadder){
-    const rec = DAY.realNet ? DAY.realNet[minute] : null;
-    let net = 0;
-    for (const r of rows) net += r.cGex + r.pGex;
-    if (rec != null && net !== 0 && Math.sign(rec) === Math.sign(net)){
-      const f = Math.min(5, Math.max(0.2, rec/net));
-      rows = rows.map(r => ({ ...r, cGex: r.cGex*f, pGex: r.pGex*f }));
-    }
-  }
-  return rows;
+  return E.gexProfile(DAY.sc.chain, DAY.S[minute], T, false);
 }
 /* 10/20/30-minutes-ago ladder nets, memoized per displayed minute */
 function stripHist(){
@@ -2784,8 +2805,11 @@ function estIVfromDaily(t, date){
 }
 /* UW's per-strike ladder values are in their own gamma units, NOT dollars.
    Relative magnitudes are what matter: build the pricing chain from the ladder's
-   SHAPE (OI proportional to each strike's share of gamma), then calibrate the
-   chain's net $GEX to the day's recorded dollar value with tuneNet. */
+   SHAPE (OI proportional to each strike's share of gamma), then scale the
+   whole chain so its net $GEX magnitude matches the day's recorded value.
+   IMPORTANT: scale BOTH sides equally — never tune one side to force a
+   target, which crushes puts and turns the whole map artificially positive.
+   The call/put balance (and therefore the flip) comes from the REAL ladder. */
 function chainFromLadder(ladder, S0, iv, refNet){
   const near = ladder.filter(r => r[0] >= S0*0.94 && r[0] <= S0*1.06);
   let maxAbs = 0;
@@ -2793,12 +2817,18 @@ function chainFromLadder(ladder, S0, iv, refNet){
   if (!maxAbs) maxAbs = 1;
   const strikes = near.map(r => ({
     k: r[0],
-    cOI: Math.round(15000*Math.abs(r[1])/maxAbs),
-    pOI: Math.max(1, Math.round(15000*Math.abs(r[2])/maxAbs)),
+    cOI: 15000*Math.abs(r[1])/maxAbs,
+    pOI: Math.max(1, 15000*Math.abs(r[2])/maxAbs),
     cSign: 1, pSign: -1
   })).sort((a,b) => a.k - b.k);
   const chain = { strikes, ivNow: iv, skew: 1.0, curve: 1.0 };
-  if (isFinite(refNet) && refNet !== 0) E.tuneNet(chain, S0, E.T0, refNet);
+  if (isFinite(refNet) && refNet !== 0){
+    const n0 = E.gexAtSpot(chain, S0, E.T0, false);
+    if (isFinite(n0) && n0 !== 0){
+      const f = Math.abs(refNet/n0);   // magnitude only — keep the ladder's own signs
+      for (const r of chain.strikes){ r.cOI *= f; r.pOI *= f; }
+    }
+  }
   return chain;
 }
 /* key levels straight from the real ladder (near-money, where walls live) */
