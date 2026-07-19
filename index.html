@@ -282,7 +282,7 @@ kbd{background:var(--surface3);border:1px solid var(--border);border-radius:5px;
           <span><span class="k" style="border-color:#3987e5"></span>SPX</span>
           <span><span class="k" style="border-color:#0ca30c"></span>Call wall</span>
           <span><span class="k" style="border-color:#e66767"></span>Put wall</span>
-          <span><span class="k" style="border-color:#c98500;border-top-style:dashed"></span>Gamma flip</span>
+          <span><span class="k" style="border-color:#c98500;border-top-style:dotted"></span>Gamma flip</span>
           <span><span class="k" style="border-color:#9085e9;border-top-style:dotted"></span>Top magnet (max |GEX|)</span>
           <span class="mut">right panel: net GEX by strike (green + / red −)</span>
         </div>
@@ -1712,7 +1712,7 @@ function drawPrice(){
   }
   levelLine(lv.callWall, COL.green, [], 'CW ' + lv.callWall);
   levelLine(lv.putWall, COL.red, [], 'PW ' + lv.putWall);
-  levelLine(lv.flip, COL.yellow, [7,5], 'FLIP ' + (lv.flip?fmtPx(lv.flip):''));
+  levelLine(lv.flip, COL.yellow, [2,2], 'FLIP ' + (lv.flip?fmtPx(lv.flip):''));   // fine dots — distinct from the long-dash daily SMA levels
   if (lv.magnet !== lv.callWall && lv.magnet !== lv.putWall) levelLine(lv.magnet, COL.violet, [2,4], 'MAG ' + lv.magnet);
   // ---- aggregate candles at the selected timeframe (real OHLC when available) ----
   const minuteCandle = j => DAY.candles ? DAY.candles[j]
