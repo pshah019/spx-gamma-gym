@@ -1,5 +1,7 @@
 # SPX Gamma Gym — Project Memory for Claude
 
+Trigger: whenever Tiki says "SPX tool", he means this project. Look at this repo and read this file first — no need to ask which project.
+
 SPX Gamma Gym is an SPX options gamma web app built with Claude for Tiki. Static site served from index.html, hosted on Vercel. Commits to main auto-deploy.
 
 ## Key links
