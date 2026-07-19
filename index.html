@@ -1205,7 +1205,7 @@ function stripProfile(minute){
         for (const r of base){ C += r.cGex; P += r.pGex; }
         const span = C - P;                    // C ≥ 0, P ≤ 0 → span ≥ 0
         if (span > 0){
-          const d = Math.max(-0.9, Math.min(0.9, (rec - (C + P))/span));
+          const d = Math.max(-0.75, Math.min(0.75, (rec - (C + P))/span));   // keep >=25% of each side so real walls stay visible
           base = base.map(r => ({ ...r, cGex: r.cGex*(1 + d), pGex: r.pGex*(1 - d) }));
         }
       }
@@ -1744,37 +1744,32 @@ function drawPrice(){
     ctx.stroke();
   }
   // ---- SMA overlays on the aggregated closes ----
+  // Curves only, visible from the very first bar of the session: early bars
+  // use an expanding average (avg of what exists so far) that converges to the
+  // true n-bar SMA once enough bars have printed. No horizontal daily levels.
   const closes = agg.map(a => a.c);
+  // seed with the previous session's bars at this timeframe so the SMAs are
+  // correct from the first bar of the day (prior-day bars count, like on any
+  // real charting platform). Falls back to an expanding average without data.
+  let seedCloses = [];
+  if (DAY.prevS && DAY.prevS.length)
+    for (let m = tf - 1; m < 390; m += tf) seedCloses.push(DAY.prevS[m]);
   const SMACOL = { 10: '#e0a63d', 20: '#9085e9', 50: '#199e70', 200: '#e66767' };
   for (const n of [10, 20, 50, 200]){
-    if (!smaOn[n] || closes.length < n) continue;
+    if (!smaOn[n] || !closes.length) continue;
+    const pre = seedCloses.slice(-Math.min(seedCloses.length, n - 1));
+    const series = pre.concat(closes);
     ctx.strokeStyle = SMACOL[n]; ctx.lineWidth = 1.3; ctx.beginPath();
     let sum = 0, started = false;
-    for (let b = 0; b < closes.length; b++){
-      sum += closes[b];
-      if (b >= n) sum -= closes[b-n];
-      if (b >= n-1){
-        const x = X(agg[b].s0 + tf/2), y = Y(sum/n);
-        if (!started){ ctx.moveTo(x, y); started = true; } else ctx.lineTo(x, y);
-      }
+    for (let b = 0; b < series.length; b++){
+      sum += series[b];
+      if (b >= n) sum -= series[b-n];
+      const idx = b - pre.length;
+      if (idx < 0) continue;
+      const x = X(agg[idx].s0 + tf/2), y = Y(sum/Math.min(n, b + 1));
+      if (!started){ ctx.moveTo(x, y); started = true; } else ctx.lineTo(x, y);
     }
     ctx.stroke();
-  }
-  // ---- DAILY SMA levels (real prior closes: "the 50-day", "the 200-day") ----
-  if (DAY.dailyCloses && DAY.dailyCloses.length){
-    ctx.font = 'bold 9px system-ui'; ctx.textAlign = 'left';
-    for (const n of [10, 20, 50, 200]){
-      if (!smaOn[n] || DAY.dailyCloses.length < n) continue;
-      let sum = 0;
-      for (let j = DAY.dailyCloses.length - n; j < DAY.dailyCloses.length; j++) sum += DAY.dailyCloses[j];
-      const lvl = sum/n;
-      if (lvl < ylo || lvl > yhi) continue;
-      ctx.strokeStyle = SMACOL[n]; ctx.lineWidth = 1; ctx.setLineDash([8, 5]);
-      ctx.beginPath(); ctx.moveTo(0, Y(lvl)); ctx.lineTo(plotW, Y(lvl)); ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.fillStyle = SMACOL[n];
-      ctx.fillText(n + 'd SMA ' + fmtPx(lvl), 6, Y(lvl) - 4);
-    }
   }
   // ---- RSI sub-pane ----
   if (rsiOn){
@@ -2895,17 +2890,62 @@ function startReconDay(t, date){
 function startReplayDay(t, date){
   const D = UWDATA.tickers[t] && UWDATA.tickers[t].days[date];
   if (!D || !D.ladder || !(D.candles || D.spot)) return startReconDay(t, date);
-  // minute series: exact recorded spot prices when available, candles otherwise
+  // minute series: the recorded spot path drives price. Candle bars are
+  // RE-ANCHORED onto it: SPX candles are proxied from ratio-scaled SPY, and a
+  // slightly-off daily ratio used to shift every bar tens of points high —
+  // mixing that with the real spot path painted giant all-red candles. The
+  // median offset vs the recorded path removes the drift; minutes inside each
+  // bar are interpolated so coarser timeframes aggregate back to the TRUE bar.
   const S = new Array(390), candles = new Array(390), realNet = new Array(390).fill(null);
   const smap = D.spot ? new Map(D.spot.map(r => [r[0], r])) : null;
-  const cmap = D.candles ? new Map(D.candles.map(c => [c[0], c])) : null;
-  let last = smap ? D.spot[0][1] : D.candles[0][1];
+  const cRows = D.candles ? D.candles.map(r => [...r]) : null;
+  if (cRows && smap){
+    const diffs = [];
+    for (const r of cRows){
+      const sp = smap.get(r[0]) || smap.get(r[0]+1) || smap.get(r[0]+2);
+      if (sp) diffs.push(sp[1] - r[4]);
+    }
+    if (diffs.length > 5){
+      diffs.sort((a,b) => a-b);
+      const off = diffs[Math.floor(diffs.length/2)];
+      if (isFinite(off) && Math.abs(off) > 0.25)
+        for (const r of cRows){ r[1] += off; r[2] += off; r[3] += off; r[4] += off; }
+    }
+    // drop corrupt bars (close-auction glitches, bad prints): anything whose
+    // close strays >0.35% from the recorded path or whose range is absurd vs
+    // the day's median — those minutes fall back to the recorded spot path
+    const rngs = cRows.map(r => r[2] - r[3]).sort((a,b) => a-b);
+    const medR = rngs[Math.floor(rngs.length/2)] || 1;
+    for (let ri = cRows.length - 1; ri >= 0; ri--){
+      const r = cRows[ri];
+      const sp = smap.get(r[0]) || smap.get(r[0]+1) || smap.get(r[0]+2);
+      const devBad = sp && Math.abs(r[4] - sp[1]) > Math.max(20, sp[1]*0.0035);
+      const rngBad = (r[2] - r[3]) > Math.max(25, 8*medR);
+      if (devBad || rngBad) cRows.splice(ri, 1);
+    }
+  }
+  const cmap = cRows ? new Map(cRows.map(c => [c[0], c]))
+ : null;
+  const cStep = cRows && cRows.length > 1 ? Math.max(1, cRows[1][0] - cRows[0][0]) : 1;
+  let last = smap ? D.spot[0][1] : cRows[0][1];
   for (let i = 0; i < 390; i++){
     const sp = smap ? smap.get(i) : null;
     const c = cmap ? cmap.get(i) : null;
     const px = sp ? sp[1] : (c ? c[4] : last);
     S[i] = px;
-    candles[i] = c ? { o: c[1], h: c[2], l: c[3], c: c[4] } : { o: last, h: Math.max(last, px), l: Math.min(last, px), c: px };
+    const rowMin = cStep > 1 ? Math.floor(i/cStep)*cStep : i;
+    const row = cmap ? cmap.get(rowMin) : null;
+    if (row && cStep > 1){
+      const k0 = (i - rowMin)/cStep, k1 = (i - rowMin + 1)/cStep;
+      const oo = row[1] + (row[4] - row[1])*k0, cc = row[1] + (row[4] - row[1])*k1;
+      candles[i] = { o: oo,
+        h: i === rowMin ? row[2] : Math.max(oo, cc),
+        l: i === rowMin ? row[3] : Math.min(oo, cc), c: cc };
+    } else if (c){
+      candles[i] = { o: c[1], h: c[2], l: c[3], c: c[4] };
+    } else {
+      candles[i] = { o: last, h: Math.max(last, px), l: Math.min(last, px), c: px };
+    }
     if (sp && isFinite(sp[2]) && sp[2] !== 0) realNet[i] = sp[2];
     last = px;
   }
@@ -2940,10 +2980,26 @@ function startReplayDay(t, date){
   const sc = { type: 'replay', name: 'Replay ' + t + ' ' + date, hint: '', chain, spot0: S[0],
     ivOpen: iv, ivClose: ivArr[389], ivPath: ivArr, rvMult: 1, eventMin: null, eventBias: 0 };
   const hasSpot = !!D.spot;
-  // real daily closes BEFORE this day → true daily SMA levels (the "50-day", "200-day")
+  // real daily closes BEFORE this day (kept for prev-close context)
   const dailyCloses = (UWDATA.tickers[t].daily || []).filter(r => r.date < date).map(r => r.c);
+  // previous session's minute closes — seeds the intraday SMAs so they're
+  // correct from the very first bar, like any real charting platform
+  const dayKeys = Object.keys(UWDATA.tickers[t].days).filter(d2 => d2 < date).sort();
+  let prevS = null;
+  for (let pi = dayKeys.length - 1; pi >= 0 && !prevS; pi--){
+    const P = UWDATA.tickers[t].days[dayKeys[pi]];
+    if (!P || !P.spot) continue;
+    const ps = new Map(P.spot.map(r => [r[0], r[1]]));
+    prevS = new Array(390);
+    let lp = P.spot[0][1];
+    for (let i = 0; i < 390; i++){
+      const v = ps.get(i);
+      prevS[i] = (v == null) ? lp : v;
+      lp = prevS[i];
+    }
+  }
   startDay({ sc, S, iv: ivArr, gTrue: null, title: 'REPLAY ' + t + ' ' + date + (hasSpot ? ' (recorded price + net GEX)' : ' (real candles + real ladder)'),
-    isCase: false, caseObj: null, candles, isReplay: true, realNet: hasSpot ? realNet : null, dailyCloses,
+    isCase: false, caseObj: null, candles, isReplay: true, realNet: hasSpot ? realNet : null, dailyCloses, prevS,
     realLadder, realLevels });
   coachSay(`<b>Real-day replay: ${t} ${date}.</b> ${hasSpot ?
     'Price is UW’s recorded per-minute series and the headline net GEX each minute is their actual recorded value — the per-strike pane is the real morning ladder repriced as spot moves.' :
