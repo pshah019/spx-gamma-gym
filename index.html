@@ -226,8 +226,13 @@ kbd{background:var(--surface3);border:1px solid var(--border);border-radius:5px;
 <!-- ================= SIM ================= -->
 <section class="tabpane" id="tab-sim">
   <div id="simhead">
+    <select id="simTickerSel" title="Ticker used for REAL-data days">
+      <option selected>SPX</option><option>AAPL</option><option>MSFT</option><option>GOOGL</option>
+      <option>AMZN</option><option>NVDA</option><option>META</option><option>TSLA</option>
+    </select>
     <select id="scenarioSel" title="Scenario archetype">
-      <option value="random">🎲 Random (don't tell me)</option>
+      <option value="realRandom">🎲 Random REAL day (UW data)</option>
+      <option value="random" selected>🎲 Random synthetic (don't tell me)</option>
       <option value="pin">Pin day (strong +gamma)</option>
       <option value="trendDown">Downside break (−gamma)</option>
       <option value="trendUp">Upside grind → squeeze</option>
@@ -235,6 +240,7 @@ kbd{background:var(--surface3);border:1px solid var(--border);border-radius:5px;
       <option value="squeeze0dte">0DTE call squeeze (trap)</option>
     </select>
     <button class="primary" id="newDayBtn">New day</button>
+    <span id="srcBadge" class="badge zero" title="Where this session's data comes from">—</span>
     <span id="dayTitle" class="small" style="color:var(--yellow);font-weight:700"></span>
     <span class="clock num" id="clock">9:30 ET</span>
     <span class="spot num" id="spotLbl">—</span>
@@ -685,10 +691,12 @@ function tuneFlip(chain, spot, T, targetFlip){
 
 /* ---------- scenarios ---------- */
 const T0 = 390/YEAR_MIN;   // one full session in years
-function makeScenario(type, seed){
+function makeScenario(type, seed, baseSpot){
   const rng = mulberry32(seed);
   const gz = gaussMaker(rng);
-  const spot0 = Math.round((6150 + rng()*300)/5)*5;
+  const spot0 = baseSpot
+    ? Math.round(baseSpot*(0.995 + rng()*0.01)/5)*5     // near the real market level
+    : Math.round((6150 + rng()*300)/5)*5;
   let chain, name, ivOpen, ivClose, rvMult, eventMin = null, eventBias = 0, hint = '';
   switch(type){
     case 'pin': {
@@ -742,7 +750,7 @@ function makeScenario(type, seed){
       hint = 'The map shows a fat call wall overhead… but the tape says call BUYERS are aggressive today.';
       break;
     }
-    default: return makeScenario(['pin','trendDown','trendUp','fomc','squeeze0dte'][Math.floor(rng()*5)], seed+7);
+    default: return makeScenario(['pin','trendDown','trendUp','fomc','squeeze0dte'][Math.floor(rng()*5)], seed+7, baseSpot);
   }
   return { type, name, hint, spot0, chain, ivOpen, ivClose, rvMult, eventMin, eventBias, seed, rng, gz };
 }
@@ -1012,10 +1020,40 @@ function buildLevelTimeline(sc, S){
 }
 function lvAt(i){ return DAY.lvT[Math.min(Math.floor(i/15), DAY.lvT.length-1)]; }
 
+let REALSPOT = null;   // latest real SPX close — anchors synthetic days to reality
+(async () => {
+  for (const u of ['/api/dix', 'https://squeezemetrics.com/monitor/static/DIX.csv']){
+    try {
+      const r = await fetch(u);
+      if (!r.ok) continue;
+      const lines = (await r.text()).trim().split('\n');
+      const px = +lines[lines.length-1].split(',')[1];
+      if (isFinite(px) && px > 100){ REALSPOT = px; }
+      break;
+    } catch (e){}
+  }
+})();
 function newDay(){
   const type = $('scenarioSel').value;
+  if (type === 'realRandom'){
+    // random replayable DAY of the ticker YOU chose — real data or nothing
+    const t = $('simTickerSel').value;
+    const days = (UWDATA.tickers[t] || {}).days || {};
+    const pool = Object.keys(days).filter(d => days[d].ladder && (days[d].candles || days[d].spot))
+      .map(d => [d, days[d].spot ? 1 : 0]);
+    if (!pool.length){
+      switchTab('data');
+      uwLog(`⚠ No real ${t} data in memory. Run a backfill with ${t} ticked (or load your saved uw_gex_data.json), then use "Random REAL day" on the Practice Sim tab.`);
+      return;
+    }
+    // prefer days with the recorded per-minute series when available
+    const rich = pool.filter(p => p[1]);
+    const src = rich.length ? rich : pool;
+    startReplayDay(t, src[Math.floor(Math.random()*src.length)][0]);
+    return;
+  }
   const seed = (Math.random()*1e9)|0;
-  const sc = E.makeScenario(type, seed);
+  const sc = E.makeScenario(type, seed, REALSPOT);
   const path = E.genScenarioPath(sc);
   sc.ivPath = path.iv;
   startDay({
@@ -1038,6 +1076,11 @@ function startDay(cfg){
   };
   setSpeed(0);
   $('dayTitle').textContent = (cfg.isCase || (cfg.sc && (cfg.sc.type === 'hist' || cfg.sc.type === 'replay'))) ? '◆ ' + cfg.title : '';
+  const sb = $('srcBadge'), sty = cfg.sc ? cfg.sc.type : '';
+  if (sty === 'replay'){ sb.textContent = '● REAL DATA (UW)'; sb.className = 'badge pos'; sb.title = 'Real recorded prices and real gamma ladder from your UW backfill.'; }
+  else if (sty === 'hist'){ sb.textContent = 'REAL REGIME · SIM PATH'; sb.className = 'badge zero'; sb.title = 'Net GEX and volatility match the real historical day; the intraday path is simulated.'; }
+  else if (cfg.isCase){ sb.textContent = 'REAL DAY · RECONSTRUCTED'; sb.className = 'badge zero'; sb.title = 'Real date, real OHLC anchors and documented levels; minute path reconstructed.'; }
+  else { sb.textContent = 'SYNTHETIC PRACTICE DAY'; sb.className = 'badge neg'; sb.title = 'Generated scenario for reps — chain and prices are simulated (anchored near the real SPX level). For real data use Data & Replay.'; }
   $('coachFeed').innerHTML = '';
   $('blotter').querySelector('tbody').innerHTML = '';
   $('noTrades').style.display = '';
@@ -1681,13 +1724,14 @@ function drawPrice(){
       if (r.net >= 0){ ctx.fillStyle = COL.green; ctx.fillRect(cx+1, y-rowH/2, len, rowH); }
       else { ctx.fillStyle = COL.red; ctx.fillRect(cx-1-len, y-rowH/2, len, rowH); }
     }
-    // real $ labels on the biggest strikes
-    const top = [...withNet].sort((a,b) => Math.abs(b.net) - Math.abs(a.net)).slice(0, 4);
+    // $ labels: biggest strikes on EACH side get their number
+    const pos = withNet.filter(r => r.net > 0).sort((a,b) => b.net - a.net).slice(0, 4);
+    const neg = withNet.filter(r => r.net < 0).sort((a,b) => a.net - b.net).slice(0, 4);
     ctx.font = 'bold 8px system-ui';
-    for (const r of top){
-      if (!Math.abs(r.net)) continue;
+    for (const r of [...pos, ...neg]){
       const y = Y(r.k);
-      const lab = (Math.abs(r.net) >= 0.95e9 ? (Math.abs(r.net)/1e9).toFixed(1) + 'b' : Math.round(Math.abs(r.net)/1e6) + 'm');
+      const a = Math.abs(r.net);
+      const lab = (r.net < 0 ? '−' : '') + (a >= 0.95e9 ? (a/1e9).toFixed(1) + 'b' : Math.round(a/1e6) + 'm');
       if (r.net >= 0){ ctx.fillStyle = '#9be89b'; ctx.textAlign = 'left'; ctx.fillText(lab, cx + 3, y - rowH/2 - 2); }
       else { ctx.fillStyle = '#f3b3b3'; ctx.textAlign = 'right'; ctx.fillText(lab, cx - 3, y - rowH/2 - 2); }
     }
@@ -2540,8 +2584,10 @@ function chainFromLadder(ladder, S0, iv){
   return { strikes: strikes.sort((a,b) => a.k - b.k), ivNow: iv, skew: 1.0, curve: 1.0 };
 }
 function startReplay(){
-  const t = $('rpTicker').value, date = $('rpDate').value.replace(' ●', '');
-  const D = UWDATA.tickers[t].days[date];
+  startReplayDay($('rpTicker').value, $('rpDate').value.replace(' ●', ''));
+}
+function startReplayDay(t, date){
+  const D = UWDATA.tickers[t] && UWDATA.tickers[t].days[date];
   if (!D || !D.ladder || !(D.candles || D.spot)) return;
   // minute series: exact recorded spot prices when available, candles otherwise
   const S = new Array(390), candles = new Array(390), realNet = new Array(390).fill(null);
