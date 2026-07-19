@@ -2560,7 +2560,14 @@ async function supaLoadAll(){
   const rows = await r.json();
   for (const row of rows){
     const T = UWDATA.tickers[row.ticker] = UWDATA.tickers[row.ticker] || { daily: [], days: {} };
-    T.days[row.day] = { candles: row.candles, ladder: row.ladder, spot: row.spot || undefined };
+    // merge, never downgrade: a load fills gaps but keeps any richer data already in memory
+    const cur = T.days[row.day] || {};
+    T.days[row.day] = {
+      candles: cur.candles || row.candles || undefined,
+      ladder: cur.ladder || row.ladder || undefined,
+      spot: cur.spot || row.spot || undefined,
+      tf: cur.tf
+    };
   }
   if (rows.length){ $('uwSaveBtn').disabled = false; refreshReplayPicker(); }
   return rows.length;
