@@ -1050,9 +1050,8 @@ async function newDay(){
     // random replayable DAY of the ticker YOU chose — memory first, then Supabase, never fake
     const t = $('simTickerSel').value;
     const poolOf = () => {
-      const days = (UWDATA.tickers[t] || {}).days || {};
-      return Object.keys(days).filter(d => days[d].ladder && (days[d].candles || days[d].spot))
-        .map(d => [d, days[d].spot ? 1 : 0]);
+      const s = replayableSets(t);
+      return [...s.full, ...s.recon];   // all real days: recorded + reconstructed
     };
     let pool = poolOf();
     if (!pool.length){
@@ -1066,9 +1065,7 @@ async function newDay(){
       uwLog(`⚠ No real ${t} data in memory or Supabase. Run a backfill with ${t} ticked and "Push to Supabase" once — after that, Random REAL day works directly from the Practice Sim tab.`);
       return;
     }
-    const rich = pool.filter(p => p[1]);
-    const src = rich.length ? rich : pool;
-    startReplayDay(t, src[Math.floor(Math.random()*src.length)][0]);
+    startReplayDay(t, pool[Math.floor(Math.random()*pool.length)]);
     return;
   }
   const seed = (Math.random()*1e9)|0;
@@ -1094,9 +1091,10 @@ function startDay(cfg){
     lvT: buildLevelTimeline(cfg.sc, cfg.S)
   };
   setSpeed(0);
-  $('dayTitle').textContent = (cfg.isCase || (cfg.sc && (cfg.sc.type === 'hist' || cfg.sc.type === 'replay'))) ? '◆ ' + cfg.title : '';
+  $('dayTitle').textContent = (cfg.isCase || (cfg.sc && ['hist','replay','recon'].includes(cfg.sc.type))) ? '◆ ' + cfg.title : '';
   const sb = $('srcBadge'), sty = cfg.sc ? cfg.sc.type : '';
   if (sty === 'replay'){ sb.textContent = '● REAL DATA (UW)'; sb.className = 'badge pos'; sb.title = 'Real recorded prices and real gamma ladder from your UW backfill.'; }
+  else if (sty === 'recon'){ sb.textContent = '◐ REAL OHLC · RECON PATH'; sb.className = 'badge zero'; sb.title = 'Older than UW\'s ~30-day intraday history: real daily OHLC + real daily net GEX, minute path reconstructed.'; }
   else if (sty === 'hist'){ sb.textContent = 'REAL REGIME · SIM PATH'; sb.className = 'badge zero'; sb.title = 'Net GEX and volatility match the real historical day; the intraday path is simulated.'; }
   else if (cfg.isCase){ sb.textContent = 'REAL DAY · RECONSTRUCTED'; sb.className = 'badge zero'; sb.title = 'Real date, real OHLC anchors and documented levels; minute path reconstructed.'; }
   else { sb.textContent = 'SYNTHETIC PRACTICE DAY'; sb.className = 'badge neg'; sb.title = 'Generated scenario for reps — chain and prices are simulated (anchored near the real SPX level). For real data use Data & Replay.'; }
@@ -2503,6 +2501,17 @@ async function runBackfill(){
           uwLog(`daily candles failed: ${e.message}`);
         }
       }
+      // daily aggregate net GEX series (long history — powers ◐ reconstructed replays)
+      if (!T.greekDaily || !T.greekDaily.length){
+        try {
+          const gj = await uwFetch(key, `/stock/${t}/greek-exposure?timeframe=2Y`); reqCount++;
+          T.greekDaily = (gj.data || gj).map(r => ({
+            date: (r.date || '').slice(0,10),
+            net: +(r.call_gamma ?? r.call_gamma_exposure ?? 0) + +(r.put_gamma ?? r.put_gamma_exposure ?? 0)
+          })).filter(r => r.date && isFinite(r.net));
+          uwLog(`daily net GEX series: ${T.greekDaily.length} days`);
+        } catch (e){ T.greekDaily = T.greekDaily || []; }
+      }
       const tradingDays = T.daily.slice(-daysBack).map(r => r.date);
       // 2) per-day: intraday candles (1m for the last 30 days, 5m for older) + gamma ladder
       //    + spot-exposures (real per-minute price AND recorded per-minute net gamma)
@@ -2654,6 +2663,9 @@ $('uwPushBtn').addEventListener('click', async () => {
     const days = UWDATA.tickers[t].days || {};
     const rows = Object.keys(days).filter(d => days[d].candles || days[d].ladder || days[d].spot)
       .map(d => ({ ticker: t, day: d, candles: days[d].candles || null, ladder: days[d].ladder || null, spot: days[d].spot || null }));
+    // meta row: daily OHLC + daily net GEX series (enables ◐ reconstructed replays from any device)
+    if ((UWDATA.tickers[t].daily || []).length)
+      rows.push({ ticker: t, day: '1900-01-01', candles: UWDATA.tickers[t].daily, ladder: UWDATA.tickers[t].greekDaily || null, spot: null });
     for (let i = 0; i < rows.length; i += 20){
       try {
         const r = await fetch(SUPA_URL + '/rest/v1/uw_days?on_conflict=ticker,day', {
@@ -2678,6 +2690,12 @@ async function supaLoadAll(){
   const rows = await r.json();
   for (const row of rows){
     const T = UWDATA.tickers[row.ticker] = UWDATA.tickers[row.ticker] || { daily: [], days: {} };
+    if (row.day === '1900-01-01'){
+      // meta row: daily OHLC + daily net GEX series
+      if (!T.daily.length && Array.isArray(row.candles)) T.daily = row.candles;
+      if ((!T.greekDaily || !T.greekDaily.length) && Array.isArray(row.ladder)) T.greekDaily = row.ladder;
+      continue;
+    }
     // merge, never downgrade: a load fills gaps but keeps any richer data already in memory
     const cur = T.days[row.day] || {};
     T.days[row.day] = {
@@ -2698,8 +2716,23 @@ $('uwPullBtn').addEventListener('click', async () => {
 });
 
 /* ---------- replay ---------- */
+function replayableSets(t){
+  const T = UWDATA.tickers[t] || {};
+  const days = T.days || {};
+  const full = new Set(Object.keys(days).filter(d => days[d].ladder && (days[d].candles || days[d].spot)));
+  const recon = new Set();
+  const today = new Date().toISOString().slice(0, 10);
+  for (const r of (T.daily || []).slice(-130)){
+    if (full.has(r.date) || r.date >= today) continue;
+    if (isFinite(r.o) && isFinite(r.h) && isFinite(r.l) && isFinite(r.c) && r.h > r.l) recon.add(r.date);
+  }
+  return { full, recon };
+}
 function refreshReplayPicker(){
-  const ts = Object.keys(UWDATA.tickers).filter(t => Object.values(UWDATA.tickers[t].days || {}).some(d => d.candles && d.ladder));
+  const ts = Object.keys(UWDATA.tickers).filter(t => {
+    const s = replayableSets(t);
+    return s.full.size + s.recon.size > 0;
+  });
   $('replayCard').style.display = ts.length ? '' : 'none';
   if (!ts.length) return;
   const sel = $('rpTicker');
@@ -2710,10 +2743,12 @@ function refreshReplayPicker(){
 }
 function refreshReplayDates(){
   const t = $('rpTicker').value;
-  const days = UWDATA.tickers[t].days;
-  const dates = Object.keys(days).filter(d => days[d].ladder && (days[d].candles || days[d].spot)).sort().reverse();
-  $('rpDate').innerHTML = dates.map(d => `<option>${d}${days[d].spot ? ' ●' : ''}</option>`).join('');
-  $('rpInfo').textContent = dates.length + ' replayable days (● = recorded per-minute price & net GEX)';
+  const { full, recon } = replayableSets(t);
+  const days = (UWDATA.tickers[t] || {}).days || {};
+  const dates = [...full, ...recon].sort().reverse();
+  $('rpDate').innerHTML = dates.map(d =>
+    `<option value="${d}">${d}${full.has(d) ? (days[d] && days[d].spot ? ' ●' : '') : ' ◐'}</option>`).join('');
+  $('rpInfo').textContent = `${dates.length} replayable days (${full.size} full recorded · ${recon.size} ◐ reconstructed from real OHLC + daily net GEX)`;
 }
 $('rpTicker').addEventListener('change', refreshReplayDates);
 
@@ -2759,11 +2794,53 @@ function levelsFromLadder(ladder, S0){
   return { callWall: cw, putWall: pw, magnet: mag };
 }
 function startReplay(){
-  startReplayDay($('rpTicker').value, $('rpDate').value.replace(' ●', ''));
+  startReplayDay($('rpTicker').value, $('rpDate').value);
+}
+/* net GEX target in dollars for a reconstructed day */
+function reconNetTarget(t, date){
+  const T = UWDATA.tickers[t] || {};
+  const g = (T.greekDaily || []).find(r => r.date === date);
+  if (g && isFinite(g.net) && g.net !== 0){
+    if (Math.abs(g.net) > 1e7) return g.net;              // already dollars
+    const mags = (T.greekDaily || []).map(r => Math.abs(r.net)).filter(v => v > 0).sort((a,b) => a-b);
+    const med = mags.length ? mags[Math.floor(mags.length/2)] : 0;
+    if (med) return g.net/med * 2.5e9;                    // unit series → scaled approximation
+  }
+  if (t === 'SPX' && typeof HISTROWS !== 'undefined' && HISTROWS){
+    const h = HISTROWS.find(r => r.date === date);
+    if (h && isFinite(h.gex) && h.gex !== 0) return h.gex; // SqueezeMetrics real daily $
+  }
+  return null;
+}
+/* older day with no UW intraday history: real OHLC anchors + real daily net GEX */
+function startReconDay(t, date){
+  const T = UWDATA.tickers[t] || {};
+  const drow = (T.daily || []).find(r => r.date === date);
+  if (!drow) return;
+  const seed = (Math.random()*1e9)|0;
+  const rng = E.mulberry32(seed);
+  const upFirst = rng() < 0.5;
+  const m1 = 60 + Math.floor(rng()*130), m2 = Math.min(380, m1 + 60 + Math.floor(rng()*120));
+  const anchors = [[0, drow.o], [m1, upFirst ? drow.h : drow.l], [m2, upFirst ? drow.l : drow.h], [389, drow.c]];
+  const volPct = Math.max(0.4, (drow.h - drow.l)/drow.o*100*0.5);
+  const S = E.bridgePath(anchors, volPct, seed, drow.h, drow.l);
+  const iv = estIVfromDaily(t, date);
+  const ivArr = new Array(390);
+  for (let i = 0; i < 390; i++) ivArr[i] = iv - iv*0.12*(i/390);
+  const chain = E.makeChain(Math.round(drow.o/5)*5, rng, { ivBase: iv, skew: iv > 0.25 ? 1.4 : 0.9, curve: 1.0 });
+  const netT = reconNetTarget(t, date);
+  if (netT != null) E.tuneNet(chain, drow.o, E.T0, netT);
+  const sc = { type: 'recon', name: 'Recon ' + t + ' ' + date, hint: '', chain, spot0: drow.o,
+    ivOpen: iv, ivClose: ivArr[389], ivPath: ivArr, rvMult: 1, eventMin: null, eventBias: 0 };
+  startDay({ sc, S, iv: ivArr, gTrue: null,
+    title: 'RECON ' + t + ' ' + date + ' (real OHLC' + (netT != null ? ' + real daily net GEX' : '') + '; minutes reconstructed)',
+    isCase: false, caseObj: null,
+    dailyCloses: (T.daily || []).filter(r => r.date < date).map(r => r.c) });
+  coachSay(`<b>◐ Reconstructed day: ${t} ${date}.</b> UW keeps per-strike/intraday history only ~30 trading days back, so this older day anchors to its REAL open/high/low/close${netT != null ? ' and its real daily net GEX (' + fmtBn(netT) + ')' : ''} with the minute path reconstructed. Days marked ● replay fully recorded data.`, 'info');
 }
 function startReplayDay(t, date){
   const D = UWDATA.tickers[t] && UWDATA.tickers[t].days[date];
-  if (!D || !D.ladder || !(D.candles || D.spot)) return;
+  if (!D || !D.ladder || !(D.candles || D.spot)) return startReconDay(t, date);
   // minute series: exact recorded spot prices when available, candles otherwise
   const S = new Array(390), candles = new Array(390), realNet = new Array(390).fill(null);
   const smap = D.spot ? new Map(D.spot.map(r => [r[0], r])) : null;
