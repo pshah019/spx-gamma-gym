@@ -1019,6 +1019,15 @@ function buildLevelTimeline(sc, S){
   return buckets;
 }
 function lvAt(i){ return DAY.lvT[Math.min(Math.floor(i/15), DAY.lvT.length-1)]; }
+/* levels with real-ladder override for replay days */
+function curLevels(i){
+  const lv = lvAt(i);
+  if (!DAY.realLevels) return lv;
+  return { ...lv,
+    callWall: DAY.realLevels.callWall ?? lv.callWall,
+    putWall: DAY.realLevels.putWall ?? lv.putWall,
+    magnet: DAY.realLevels.magnet ?? lv.magnet };
+}
 
 let REALSPOT = null;   // latest real SPX close — anchors synthetic days to reality
 (async () => {
@@ -1201,8 +1210,8 @@ function doTrade(side){ // 'buy' | 'sell'
   }
   if (pos.qty === 0) DAY.positions.delete(key); else DAY.positions.set(key, pos);
   // log w/ context
-  const lv = lvAt(DAY.i), S = spot();
-  const gN = naiveNetNow();
+  const lv = curLevels(DAY.i), S = spot();
+  const gN = (DAY.realNet && DAY.realNet[DAY.i] != null) ? DAY.realNet[DAY.i] : naiveNetNow();
   const rec = {
     min: DAY.i, side, cp, K, px, qty, S,
     net: gN, flip: lv.flip, cw: lv.callWall, pw: lv.putWall,
@@ -1286,7 +1295,7 @@ function coachSay(html, kind){
 }
 function regimeWord(net){ return net > 0 ? 'positive' : 'negative'; }
 function openingBriefing(){
-  const lv = lvAt(0), S = DAY.S[0];
+  const lv = curLevels(0), S = DAY.S[0];
   const pos = lv.net > 0;
   return `<b>Morning briefing.</b> SPX opens at <b>${fmtPx(S)}</b>. The dealer map reads <b>${fmtBn(lv.net)} per 1%</b> — ${pos ? 'positive' : 'negative'} gamma. ` +
     `Gamma flip ${lv.flip ? '<b>'+fmtPx(lv.flip)+'</b>' : (lv.net<0?'<b>far overhead</b> (deeply negative territory)':'<b>far below</b>')}, call wall <b>${lv.callWall}</b>, put wall <b>${lv.putWall}</b>. ` +
@@ -1303,7 +1312,7 @@ function coachEvery(flag, cooldown, fn){
   DAY.coachFlags[flag] = DAY.i; fn();
 }
 function coachTick(){
-  const i = DAY.i, S = spot(), lv = lvAt(i), prevLv = lvAt(Math.max(0,i-1));
+  const i = DAY.i, S = spot(), lv = curLevels(i), prevLv = curLevels(Math.max(0,i-1));
   const net = lv.net, prevS = DAY.S[i-1];
   // flip crossings
   if (lv.flip && prevS && ((prevS > lv.flip && S <= lv.flip) || (prevS < lv.flip && S >= lv.flip))){
@@ -1475,7 +1484,7 @@ $('modal').addEventListener('click', e => { if (e.target.id === 'modal') closeMo
    RENDERING
 ============================================================ */
 function refreshAll(){
-  const S = spot(), lv = lvAt(DAY.i);
+  const S = spot(), lv = curLevels(DAY.i);
   $('clock').textContent = minToClock(DAY.i);
   const chg = S - DAY.S[0];
   $('spotLbl').innerHTML = fmtPx(S) + ` <span class="small ${chg>=0?'up':'dn'}">${chg>=0?'+':''}${chg.toFixed(0)}</span>`;
@@ -1561,7 +1570,7 @@ function drawPrice(){
   const cv = $('priceCanvas');
   const { ctx, W, H } = setupCanvas(cv, 430);
   ctx.fillStyle = COL.surface; ctx.fillRect(0,0,W,H);
-  const i = DAY.i, lv = lvAt(i);
+  const i = DAY.i, lv = curLevels(i);
   const rsiH = rsiOn ? 74 : 0;
   const padB = 24 + rsiH, padT = 10;
   const stripW = 96, labW = 56;
@@ -1729,9 +1738,16 @@ function drawPrice(){
   // OI everywhere — the pane should look populated, like UW/SpotGamma).
   const sx = W - stripW;
   ctx.fillStyle = '#161615'; ctx.fillRect(sx, 0, stripW, H-padB+2);
-  const T = currentT();
-  DAY.sc.chain.ivNow = DAY.iv[i];
-  const prof = E.gexProfile(DAY.sc.chain, DAY.S[i], T, false).filter(r => r.k > ylo && r.k < yhi);
+  let prof;
+  if (DAY.realLadder){
+    // REAL recorded ladder (dollar-calibrated) — drawn as-is, no model in between
+    prof = DAY.realLadder.filter(r => r[0] > ylo && r[0] < yhi)
+      .map(r => ({ k: r[0], cGex: r[1], pGex: r[2], cOI: 1, pOI: 1 }));
+  } else {
+    const T = currentT();
+    DAY.sc.chain.ivNow = DAY.iv[i];
+    prof = E.gexProfile(DAY.sc.chain, DAY.S[i], T, false).filter(r => r.k > ylo && r.k < yhi);
+  }
   const cx = sx + stripW*0.5;
   ctx.strokeStyle = COL.axis; ctx.beginPath(); ctx.moveTo(cx, padT); ctx.lineTo(cx, H-padB); ctx.stroke();
   const rowH = Math.max(2, Math.min(8, (H-padT-padB)/Math.max(1,prof.length) - 2));
@@ -1797,7 +1813,7 @@ $('priceCanvas').addEventListener('mousemove', e => {
   const mx = e.clientX - r.left;
   if (mx > plotW){ $('chartTip').style.display = 'none'; return; }
   const m = Math.max(0, Math.min(i, Math.round(mx/plotW*389)));
-  const lv = lvAt(m);
+  const lv = curLevels(m);
   const tip = $('chartTip');
   tip.style.display = 'block';
   tip.style.left = Math.min(mx + 14, r.width - 190) + 'px';
@@ -2609,17 +2625,36 @@ function estIVfromDaily(t, date){
   const rv = Math.sqrt(rets.reduce((a,b) => a + (b-mean)*(b-mean), 0)/rets.length)*Math.sqrt(252);
   return Math.min(1.2, Math.max(0.08, rv*1.15));
 }
-function chainFromLadder(ladder, S0, iv){
-  const strikes = [];
+/* UW's per-strike ladder values are in their own gamma units, NOT dollars.
+   Relative magnitudes are what matter: build the pricing chain from the ladder's
+   SHAPE (OI proportional to each strike's share of gamma), then calibrate the
+   chain's net $GEX to the day's recorded dollar value with tuneNet. */
+function chainFromLadder(ladder, S0, iv, refNet){
+  const near = ladder.filter(r => r[0] >= S0*0.94 && r[0] <= S0*1.06);
+  let maxAbs = 0;
+  for (const r of near) maxAbs = Math.max(maxAbs, Math.abs(r[1]), Math.abs(r[2]));
+  if (!maxAbs) maxAbs = 1;
+  const strikes = near.map(r => ({
+    k: r[0],
+    cOI: Math.round(15000*Math.abs(r[1])/maxAbs),
+    pOI: Math.max(1, Math.round(15000*Math.abs(r[2])/maxAbs)),
+    cSign: 1, pSign: -1
+  })).sort((a,b) => a.k - b.k);
+  const chain = { strikes, ivNow: iv, skew: 1.0, curve: 1.0 };
+  if (isFinite(refNet) && refNet !== 0) E.tuneNet(chain, S0, E.T0, refNet);
+  return chain;
+}
+/* key levels straight from the real ladder (near-money, where walls live) */
+function levelsFromLadder(ladder, S0){
+  let cw = null, cwv = 0, pw = null, pwv = 0, mag = null, magv = 0;
   for (const [k, cg, pg] of ladder){
-    if (k < S0*0.82 || k > S0*1.18) continue;
-    const ivk = E.smileIV(iv, k, S0, 1.0, 1.0);
-    const g = E.bs(S0, k, E.T0*6.5, ivk, true).gamma;   // ladder includes further expiries → use a longer effective T for inversion
-    const unit = g * 100 * S0 * S0 * 0.01;
-    if (unit <= 0) continue;
-    strikes.push({ k, cOI: Math.max(0, Math.round(Math.abs(cg)/unit)), pOI: Math.max(0, Math.round(Math.abs(pg)/unit)), cSign: 1, pSign: -1 });
+    if (k < S0*0.95 || k > S0*1.05) continue;
+    if (k >= S0 && cg > cwv){ cwv = cg; cw = k; }
+    if (k <= S0 && pg < pwv){ pwv = pg; pw = k; }
+    const tot = Math.abs(cg) + Math.abs(pg);
+    if (k >= S0*0.97 && k <= S0*1.03 && tot > magv){ magv = tot; mag = k; }
   }
-  return { strikes: strikes.sort((a,b) => a.k - b.k), ivNow: iv, skew: 1.0, curve: 1.0 };
+  return { callWall: cw, putWall: pw, magnet: mag };
 }
 function startReplay(){
   startReplayDay($('rpTicker').value, $('rpDate').value.replace(' ●', ''));
@@ -2646,14 +2681,24 @@ function startReplayDay(t, date){
   const iv = estIVfromDaily(t, date);
   const ivArr = new Array(390);
   for (let i = 0; i < 390; i++) ivArr[i] = iv - (iv*0.12)*(i/390);
-  const chain = chainFromLadder(D.ladder, S[0], iv);
+  // calibrate: dollar reference = first recorded net GEX of the day (real $)
+  const refNet = realNet.find(v => v !== null && v !== 0) ?? null;
+  const chain = chainFromLadder(D.ladder, S[0], iv, refNet);
+  // display ladder: real shape, scaled into dollars via the recorded net
+  let lSum = 0;
+  const nearL = D.ladder.filter(r => r[0] >= S[0]*0.92 && r[0] <= S[0]*1.08);
+  for (const r of nearL) lSum += r[1] + r[2];
+  const lScale = (refNet && lSum) ? Math.abs(refNet/lSum) : 1;
+  const realLadder = nearL.map(r => [r[0], r[1]*lScale, (r[2] <= 0 ? r[2] : -r[2])*lScale]);
+  const realLevels = levelsFromLadder(D.ladder, S[0]);
   const sc = { type: 'replay', name: 'Replay ' + t + ' ' + date, hint: '', chain, spot0: S[0],
     ivOpen: iv, ivClose: ivArr[389], ivPath: ivArr, rvMult: 1, eventMin: null, eventBias: 0 };
   const hasSpot = !!D.spot;
   // real daily closes BEFORE this day → true daily SMA levels (the "50-day", "200-day")
   const dailyCloses = (UWDATA.tickers[t].daily || []).filter(r => r.date < date).map(r => r.c);
   startDay({ sc, S, iv: ivArr, gTrue: null, title: 'REPLAY ' + t + ' ' + date + (hasSpot ? ' (recorded price + net GEX)' : ' (real candles + real ladder)'),
-    isCase: false, caseObj: null, candles, isReplay: true, realNet: hasSpot ? realNet : null, dailyCloses });
+    isCase: false, caseObj: null, candles, isReplay: true, realNet: hasSpot ? realNet : null, dailyCloses,
+    realLadder, realLevels });
   coachSay(`<b>Real-day replay: ${t} ${date}.</b> ${hasSpot ?
     'Price is UW’s recorded per-minute series and the headline net GEX each minute is their actual recorded value — the per-strike pane is the real morning ladder repriced as spot moves.' :
     'Candles are the actual tape; the gamma ladder is UW’s real morning positioning, repriced as spot moves.'} Premiums are Black-Scholes at ~${(iv*100).toFixed(0)}% IV (estimated from that month's realized vol) — realistic, not exchange quotes.`, 'info');
