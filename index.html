@@ -2554,6 +2554,23 @@ async function runBackfill(){
         } catch (e){ T.greekDaily = T.greekDaily || []; }
       }
       const tradingDays = T.daily.slice(-daysBack).map(r => r.date);
+      const hadBefore = new Set(Object.keys(T.days || {}).filter(d => (T.days[d].spot || T.days[d].candles) && T.days[d].ladder));
+      // one-time probe: does the per-strike endpoint serve an INTRADAY series
+      // (time-stamped rows) or just one snapshot per day? The answer decides
+      // whether the replay ladder can ever evolve minute-by-minute like UW's.
+      try {
+        const probeDay = tradingDays[tradingDays.length - 2] || tradingDays[tradingDays.length - 1];
+        const pj = await uwFetch(key, `/stock/${t}/spot-exposures/strike?date=${probeDay}`); reqCount++;
+        const pr = pj.data || pj;
+        if (Array.isArray(pr) && pr.length){
+          const fields = Object.keys(pr[0]);
+          const timeKey = fields.find(k => /time|minute|timestamp|tape/i.test(k));
+          const uniqStrikes = new Set(pr.map(r => r.strike ?? r.strike_price ?? r.price)).size;
+          uwLog(`🔎 ${t} per-strike probe (${probeDay}): ${pr.length} rows, ${uniqStrikes} strikes, fields: ${fields.join(', ')}` +
+            (timeKey && pr.length > uniqStrikes ? ` → <b>INTRADAY series available via "${timeKey}"</b> — tell Claude, the replay ladder can be upgraded to true minute-by-minute.` :
+             ' → single snapshot per day (no intraday per-strike history on this endpoint).'));
+        } else uwLog(`🔎 ${t} per-strike probe: empty response.`);
+      } catch (e){ uwLog(`🔎 ${t} per-strike probe failed: ${e.message}`); }
       // 2) per-day: intraday candles (1m for the last 30 days, 5m for older) + gamma ladder
       //    + spot-exposures (real per-minute price AND recorded per-minute net gamma)
       let done = 0, cOk = 0, cFail = 0, lOk = 0, lFail = 0, sOk = 0, sFail = 0, coarse = 0;
@@ -2651,6 +2668,10 @@ async function runBackfill(){
       uwLog(`<b>${t} complete: ${okDays} replayable days.</b> candles ${cOk}✓/${cFail}✗${coarse ? ' (' + coarse + ' days on 5m/15m bars)' : ''} · ladders ${lOk}✓/${lFail}✗ · spot-minute series ${sOk}✓/${sFail}✗` +
         (cFail > lFail && sFail > lFail ? ' — intraday price history is the limiting side.' :
          lFail > cFail ? ' — per-strike ladder history is the limiting side.' : ''));
+      const newly = tradingDays.filter(d => !hadBefore.has(d) && T.days[d] && T.days[d].ladder && (T.days[d].spot || T.days[d].candles));
+      uwLog(newly.length
+        ? `✅ <b>${t}: ${newly.length} NEW fully-recorded day(s) captured:</b> ${newly.join(', ')} — click <b>"Push to Supabase"</b> below to save them permanently.`
+        : `✅ <b>${t}: no new days</b> — everything in UW's current window was already stored. Nothing to push; you're up to date.`);
     }
     uwLog(`<b>Backfill finished — ${reqCount} API requests used.</b> Save the data file, then regenerate your UW key.`);
   } catch (e){
