@@ -259,12 +259,13 @@ kbd{background:var(--surface3);border:1px solid var(--border);border-radius:5px;
         </div>
         <div class="lvlLegend">
           <button id="chartModeBtn" style="padding:2px 10px;font-size:.75rem">🕯 Candles</button>
+          <button id="gexModeBtn" style="padding:2px 10px;font-size:.75rem" title="Toggle the GEX pane between UW-style net-per-strike and call/put split">C|P split</button>
           <span><span class="k" style="border-color:#3987e5"></span>SPX</span>
           <span><span class="k" style="border-color:#0ca30c"></span>Call wall</span>
           <span><span class="k" style="border-color:#e66767"></span>Put wall</span>
           <span><span class="k" style="border-color:#c98500;border-top-style:dashed"></span>Gamma flip</span>
           <span><span class="k" style="border-color:#9085e9;border-top-style:dotted"></span>Top magnet (max |GEX|)</span>
-          <span class="mut">right panel: GEX by strike (green calls / red puts)</span>
+          <span class="mut">right panel: net GEX by strike (green + / red −)</span>
         </div>
       </div>
       <div class="card">
@@ -540,8 +541,12 @@ function baseOI(k, spot, rng, side){
   if (k % 25 === 0) oi *= 1.8;
   if (k % 50 === 0) oi *= 1.25;
   if (k % 100 === 0) oi *= 1.9;
-  oi *= (0.55 + 0.9*rng());
-  return Math.round(oi);
+  // heavy-tailed lumpiness: real strikes are dominated by discrete positions —
+  // a few blocks tower over near-dead neighbors (the UW look), not a smooth curve
+  oi *= Math.exp((rng()*2 - 1)*1.15);
+  if (rng() < 0.18) oi *= 0.12;              // near-dead strike
+  if (rng() < 0.05) oi *= 3.5 + rng()*6;     // block position
+  return Math.round(Math.min(oi, 24000));    // even block strikes have finite size
 }
 function makeChain(spot, rng, opts){
   opts = opts || {};
@@ -611,7 +616,7 @@ function makeScenario(type, seed){
       addCluster(chain, Math.round(spot0*0.945/25)*25, 'p', 3400);
       addCluster(chain, Math.round(spot0*0.92/25)*25, 'p', 2600);
       tuneFlip(chain, spot0, T0, spot0*(1.006 + rng()*0.005));   // flip ABOVE spot → negative regime
-      name = 'Risk-off open'; ivOpen = 0.235; ivClose = 0.30; rvMult = 1.5; eventBias = -1;
+      name = 'Risk-off open'; ivOpen = 0.235; ivClose = 0.30; rvMult = 1.25; eventBias = -1;
       hint = 'Futures soft overnight; vol bid; spot opens below the flip.';
       break;
     }
@@ -685,10 +690,15 @@ function genScenarioPath(sc){
         if (d < 0.004) drift += sigMin*0.9*(1 - d/0.004);
       }
     } else {
-      sig *= (1 + 0.48*Math.min(-Gn, 1.7));
-      drift += 0.27*ema*Math.min(-Gn, 1.7);
-      drift += sc.eventBias*sigMin*0.13;
+      sig *= (1 + 0.42*Math.min(-Gn, 1.5));
+      drift += 0.17*ema*Math.min(-Gn, 1.5);
+      drift += sc.eventBias*sigMin*0.08;
     }
+    // circuit-breaker realism: beyond ~±5.5% from the open, liquidity events,
+    // halts and opportunistic flows lean against further extension
+    const dayMove = s/sc.spot0 - 1;
+    if (dayMove < -0.055){ drift += Math.min((-0.055 - dayMove)*0.05, 0.0006); sig *= 0.75; }
+    if (dayMove > 0.055){ drift -= Math.min((dayMove - 0.055)*0.05, 0.0006); sig *= 0.75; }
     if (sc.eventMin !== null && i === sc.eventMin){
       const shock = sc.eventBias*(1.2 + Math.abs(sc.gz())*0.9)*iv/Math.sqrt(252)*0.35;
       s *= (1 + shock);
@@ -968,6 +978,12 @@ $('chartModeBtn').addEventListener('click', () => {
   chartMode = chartMode === 'line' ? 'candles' : 'line';
   $('chartModeBtn').textContent = chartMode === 'line' ? '🕯 Candles' : '📈 Line';
   if (DAY) drawPrice();
+});
+$('gexModeBtn').addEventListener('click', () => {
+  gexMode = gexMode === 'net' ? 'split' : 'net';
+  $('gexModeBtn').textContent = gexMode === 'net' ? 'C|P split' : 'Σ Net';
+  if (DAY) drawPrice();
+  if (typeof LIVEOUT !== 'undefined' && LIVEOUT) drawLiveProfile(LIVEOUT);
 });
 
 function advance(){
@@ -1373,6 +1389,7 @@ const COL = { blue:'#3987e5', green:'#0ca30c', red:'#e66767', yellow:'#c98500', 
 
 let yState = { lo: null, hi: null };
 let chartMode = 'line';
+let gexMode = 'net';
 function drawPrice(){
   const cv = $('priceCanvas');
   const { ctx, W, H } = setupCanvas(cv, 430);
@@ -1476,24 +1493,41 @@ function drawPrice(){
   const T = currentT();
   DAY.sc.chain.ivNow = DAY.iv[i];
   const prof = E.gexProfile(DAY.sc.chain, DAY.S[i], T, false).filter(r => r.k > ylo && r.k < yhi);
-  const amp = v => Math.sqrt(Math.max(v, 0));
-  let maxG = 0;
-  for (const r of prof) maxG = Math.max(maxG, amp(r.cGex), amp(-r.pGex));
-  if (!maxG) maxG = 1;
   const cx = sx + stripW*0.5;
   ctx.strokeStyle = COL.axis; ctx.beginPath(); ctx.moveTo(cx, padT); ctx.lineTo(cx, H-padB); ctx.stroke();
   const rowH = Math.max(2, Math.min(8, (H-padT-padB)/Math.max(1,prof.length) - 2));
-  for (const r of prof){
-    const y = Y(r.k);
-    const cl = amp(r.cGex)/maxG * (stripW*0.46);
-    const pl = amp(-r.pGex)/maxG * (stripW*0.46);
-    ctx.fillStyle = COL.green;
-    if (r.cOI > 0) ctx.fillRect(cx+1, y-rowH/2, Math.max(cl, 1.2), rowH);
-    ctx.fillStyle = COL.red;
-    if (r.pOI > 0) ctx.fillRect(cx-1-Math.max(pl, 1.2), y-rowH/2, Math.max(pl, 1.2), rowH);
+  if (gexMode === 'net'){
+    // UW-style: one linear bar per strike, sign decides side & color
+    let maxN = 0;
+    for (const r of prof) maxN = Math.max(maxN, Math.abs(r.cGex + r.pGex));
+    if (!maxN) maxN = 1;
+    for (const r of prof){
+      const y = Y(r.k);
+      const net = r.cGex + r.pGex;
+      const len = Math.max(Math.abs(net)/maxN * (stripW*0.46), (r.cOI + r.pOI) > 0 ? 1 : 0);
+      if (!len) continue;
+      if (net >= 0){ ctx.fillStyle = COL.green; ctx.fillRect(cx+1, y-rowH/2, len, rowH); }
+      else { ctx.fillStyle = COL.red; ctx.fillRect(cx-1-len, y-rowH/2, len, rowH); }
+    }
+    ctx.fillStyle = COL.muted; ctx.font = '9px system-ui'; ctx.textAlign = 'center';
+    ctx.fillText('− net +', cx, H - padB + 14);
+  } else {
+    const amp = v => Math.sqrt(Math.max(v, 0));
+    let maxG = 0;
+    for (const r of prof) maxG = Math.max(maxG, amp(r.cGex), amp(-r.pGex));
+    if (!maxG) maxG = 1;
+    for (const r of prof){
+      const y = Y(r.k);
+      const cl = amp(r.cGex)/maxG * (stripW*0.46);
+      const pl = amp(-r.pGex)/maxG * (stripW*0.46);
+      ctx.fillStyle = COL.green;
+      if (r.cOI > 0) ctx.fillRect(cx+1, y-rowH/2, Math.max(cl, 1.2), rowH);
+      ctx.fillStyle = COL.red;
+      if (r.pOI > 0) ctx.fillRect(cx-1-Math.max(pl, 1.2), y-rowH/2, Math.max(pl, 1.2), rowH);
+    }
+    ctx.fillStyle = COL.muted; ctx.font = '9px system-ui'; ctx.textAlign = 'center';
+    ctx.fillText('puts | calls', cx, H - padB + 14);
   }
-  ctx.fillStyle = COL.muted; ctx.font = '9px system-ui'; ctx.textAlign = 'center';
-  ctx.fillText('puts | calls', cx, H - padB + 14);
   // spot marker on strip
   ctx.strokeStyle = COL.blue; ctx.setLineDash([3,3]);
   ctx.beginPath(); ctx.moveTo(sx, Y(DAY.S[i])); ctx.lineTo(W, Y(DAY.S[i])); ctx.stroke(); ctx.setLineDash([]);
@@ -1746,6 +1780,7 @@ $('parseLiveBtn').addEventListener('click', () => {
 });
 $('liveExpSel').addEventListener('change', () => { if (LIVE) renderLive(LIVE); });
 
+let LIVEOUT = null;
 function renderLive(json){
   LIVE = json;
   let out;
@@ -1762,6 +1797,7 @@ function renderLive(json){
   $('lvCW').textContent = out.callWall ?? '—';
   $('lvPW').textContent = out.putWall ?? '—';
   $('lvRegime').innerHTML = out.net >= 0 ? '<span class="up">stabilizing</span>' : '<span class="dn">amplifying</span>';
+  LIVEOUT = out;
   drawLiveProfile(out);
   renderLiveTable(out);
   $('livePlaybook').innerHTML = livePlaybookText(out);
@@ -1806,8 +1842,11 @@ function drawLiveProfile(o){
   const prof = o.profile.filter(r => Math.abs(r.cGex) + Math.abs(r.pGex) > 0);
   if (!prof.length) return;
   const kLo = Math.min(...prof.map(r => r.k)), kHi = Math.max(...prof.map(r => r.k));
-  const amp = v => Math.sqrt(Math.max(v, 0));
-  let maxG = 0; for (const r of prof) maxG = Math.max(maxG, amp(r.cGex), amp(-r.pGex));
+  const amp = gexMode === 'net' ? (v => Math.max(v, 0)) : (v => Math.sqrt(Math.max(v, 0)));
+  let maxG = 0;
+  for (const r of prof) maxG = gexMode === 'net'
+    ? Math.max(maxG, Math.abs(r.cGex + r.pGex))
+    : Math.max(maxG, amp(r.cGex), amp(-r.pGex));
   if (!maxG) maxG = 1;
   const padL = 64, padR = 16, padT = 10, padB = 20;
   const cx = padL + (W - padL - padR)/2;
@@ -1815,12 +1854,22 @@ function drawLiveProfile(o){
   const rowH = Math.max(2, Math.min(9, (H - padT - padB)/prof.length - 1.5));
   ctx.strokeStyle = COL.axis; ctx.beginPath(); ctx.moveTo(cx, padT); ctx.lineTo(cx, H - padB); ctx.stroke();
   cv._rows = [];
+  const halfW = (W - padL - padR)/2*0.94;
   for (const r of prof){
     const y = Y(r.k);
-    const cl = amp(r.cGex)/maxG*(W - padL - padR)/2*0.94;
-    const pl = amp(-r.pGex)/maxG*(W - padL - padR)/2*0.94;
-    if (r.cOI > 0){ ctx.fillStyle = COL.green; ctx.fillRect(cx+1, y - rowH/2, Math.max(cl, 1.2), rowH); }
-    if (r.pOI > 0){ ctx.fillStyle = COL.red; ctx.fillRect(cx-1-Math.max(pl, 1.2), y - rowH/2, Math.max(pl, 1.2), rowH); }
+    if (gexMode === 'net'){
+      const net = r.cGex + r.pGex;
+      const len = Math.max(Math.abs(net)/maxG*halfW, (r.cOI + r.pOI) > 0 ? 1 : 0);
+      if (len){
+        if (net >= 0){ ctx.fillStyle = COL.green; ctx.fillRect(cx+1, y - rowH/2, len, rowH); }
+        else { ctx.fillStyle = COL.red; ctx.fillRect(cx-1-len, y - rowH/2, len, rowH); }
+      }
+    } else {
+      const cl = amp(r.cGex)/maxG*halfW;
+      const pl = amp(-r.pGex)/maxG*halfW;
+      if (r.cOI > 0){ ctx.fillStyle = COL.green; ctx.fillRect(cx+1, y - rowH/2, Math.max(cl, 1.2), rowH); }
+      if (r.pOI > 0){ ctx.fillStyle = COL.red; ctx.fillRect(cx-1-Math.max(pl, 1.2), y - rowH/2, Math.max(pl, 1.2), rowH); }
+    }
     cv._rows.push({ y, r });
   }
   // strike labels for round numbers
