@@ -1,0 +1,5 @@
+{
+  "rewrites": [
+    { "source": "/api/spx", "destination": "https://cdn.cboe.com/api/global/delayed_quotes/options/_SPX.json" }
+  ]
+}

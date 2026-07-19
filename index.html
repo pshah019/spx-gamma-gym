@@ -1673,15 +1673,19 @@ let LIVE = null;
 $('fetchLiveBtn').addEventListener('click', async () => {
   const st = $('liveStatus');
   st.textContent = 'fetching…';
-  try {
-    const resp = await fetch('https://cdn.cboe.com/api/global/delayed_quotes/options/_SPX.json');
-    if (!resp.ok) throw new Error('HTTP ' + resp.status);
-    const j = await resp.json();
-    st.textContent = 'got it ✓ (delayed ~15 min)';
-    renderLive(j);
-  } catch (err) {
-    st.textContent = 'Direct fetch blocked here (' + err.message + ') — use the paste method below.';
+  // /api/spx works when hosted on Vercel (server-side proxy, no CORS); direct CBOE works in some contexts
+  const sources = ['/api/spx', 'https://cdn.cboe.com/api/global/delayed_quotes/options/_SPX.json'];
+  for (const url of sources){
+    try {
+      const resp = await fetch(url);
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      const j = await resp.json();
+      st.textContent = 'got it ✓ (delayed ~15 min)';
+      renderLive(j);
+      return;
+    } catch (err) { /* try next source */ }
   }
+  st.textContent = 'Direct fetch blocked here — use the paste method below.';
 });
 $('parseLiveBtn').addEventListener('click', () => {
   try {
