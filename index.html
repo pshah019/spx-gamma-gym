@@ -1427,11 +1427,12 @@ function refreshAll(){
   $('clock').textContent = minToClock(DAY.i);
   const chg = S - DAY.S[0];
   $('spotLbl').innerHTML = fmtPx(S) + ` <span class="small ${chg>=0?'up':'dn'}">${chg>=0?'+':''}${chg.toFixed(0)}</span>`;
-  const net = lv.net;
+  const recorded = DAY.realNet && DAY.realNet[DAY.i] != null ? DAY.realNet[DAY.i] : null;
+  const net = recorded !== null ? recorded : lv.net;
   const badge = $('regimeBadge');
   badge.textContent = (net>0?'+':'−') + ' GAMMA ' + fmtBn(net).replace('+','').replace('−','') + '/1%';
   badge.className = 'badge ' + (Math.abs(net) < 5e8 ? 'zero' : net > 0 ? 'pos' : 'neg');
-  $('netGexLbl').textContent = fmtBn(net) + '/1%';
+  $('netGexLbl').textContent = fmtBn(net) + '/1%' + (recorded !== null ? ' ●rec' : '');
   $('flipLbl').textContent = lv.flip ? fmtPx(lv.flip) : (lv.net < 0 ? 'far overhead ↑' : 'far below ↓');
   $('cwLbl').textContent = lv.callWall ?? '—';
   $('pwLbl').textContent = lv.putWall ?? '—';
@@ -2284,38 +2285,93 @@ async function runBackfill(){
   uwAbort = false;
   $('uwRunBtn').disabled = true; $('uwStopBtn').disabled = false;
   let reqCount = 0;
+  // SPX itself doesn't trade, so UW's OHLC endpoint 422s on it. Plan B for indices:
+  // real SPX gamma ladders + SPY 1-min candles rescaled by the real daily SPX/SPY ratio.
+  let spxClose = null;   // date -> real SPX close (SqueezeMetrics daily file)
+  async function loadSpxCloses(){
+    if (spxClose) return spxClose;
+    spxClose = {};
+    for (const u of ['/api/dix', 'https://squeezemetrics.com/monitor/static/DIX.csv']){
+      try {
+        const r = await fetch(u);
+        if (!r.ok) continue;
+        for (const line of (await r.text()).trim().split('\n').slice(1)){
+          const p = line.trim().split(',');
+          if (p.length >= 2) spxClose[p[0]] = +p[1];
+        }
+        break;
+      } catch (e){}
+    }
+    return spxClose;
+  }
   try {
     for (const t of tickers){
       if (uwAbort) break;
       uwLog(`<b>── ${t} ──</b>`);
       const T = UWDATA.tickers[t] = UWDATA.tickers[t] || { daily: [], days: {} };
+      let priceT = t;                  // ticker used for CANDLES (ladders always use t)
+      const scaleByDate = {};          // date -> multiplier applied to priceT candles
       // 1) daily candles (also gives us the trading calendar)
+      async function pullDaily(sym){
+        const dj = await uwFetch(key, `/stock/${sym}/ohlc/1d?limit=550`); reqCount++;
+        return (dj.data || dj).map(c => ({ date: (c.date || c.start_time || '').slice(0,10), o:+c.open, h:+c.high, l:+c.low, c:+c.close }))
+          .filter(r => r.date && isFinite(r.c)).sort((a,b) => a.date < b.date ? -1 : 1);
+      }
       try {
-        const dj = await uwFetch(key, `/stock/${t}/ohlc/1d?limit=550`); reqCount++;
-        const rows = (dj.data || dj).map(c => ({ date: (c.date || c.start_time || '').slice(0,10), o:+c.open, h:+c.high, l:+c.low, c:+c.close }))
-          .filter(r => r.date).sort((a,b) => a.date < b.date ? -1 : 1);
-        T.daily = rows;
-        uwLog(`daily candles: ${rows.length} days (${rows[0]?.date} → ${rows[rows.length-1]?.date})`);
-      } catch (e){ uwLog(`daily candles failed: ${e.message}`); }
+        T.daily = await pullDaily(t);
+        uwLog(`daily candles: ${T.daily.length} days (${T.daily[0]?.date} → ${T.daily[T.daily.length-1]?.date})`);
+      } catch (e){
+        if (t === 'SPX'){
+          uwLog(`SPX index candles unsupported (${e.message}) → using SPY candles × real daily SPX/SPY ratio`);
+          priceT = 'SPY';
+          const spyDaily = await pullDaily('SPY');
+          const closes = await loadSpxCloses();
+          T.daily = spyDaily.map(r => {
+            const sc = closes[r.date] ? closes[r.date]/r.c : null;
+            if (sc) scaleByDate[r.date] = sc;
+            const f = sc || 10;
+            return { date: r.date, o: r.o*f, h: r.h*f, l: r.l*f, c: sc ? closes[r.date] : r.c*f };
+          });
+          // fill missing ratios (e.g. most recent day) with the nearest known one
+          let lastSc = null;
+          for (const r of T.daily){ if (scaleByDate[r.date]) lastSc = scaleByDate[r.date]; else if (lastSc) scaleByDate[r.date] = lastSc; }
+          uwLog(`SPY→SPX calibration: ${Object.keys(scaleByDate).length} days scaled by real closing ratio (~${(lastSc || 10).toFixed(3)})`);
+        } else {
+          uwLog(`daily candles failed: ${e.message}`);
+        }
+      }
       const tradingDays = T.daily.slice(-daysBack).map(r => r.date);
-      // 2) per-day: 1-min candles + per-strike gamma ladder
-      let done = 0;
-      for (const date of tradingDays){
+      // 2) per-day: intraday candles (1m for the last 30 days, 5m for older) + gamma ladder
+      //    + spot-exposures (real per-minute price AND recorded per-minute net gamma)
+      let done = 0, cOk = 0, cFail = 0, lOk = 0, lFail = 0, sOk = 0, sFail = 0, coarse = 0;
+      for (let di = 0; di < tradingDays.length; di++){
+        const date = tradingDays[di];
         if (uwAbort) break;
         const day = T.days[date] = T.days[date] || {};
+        const f = scaleByDate[date] || 1;
+        const daysFromEnd = tradingDays.length - 1 - di;   // 0 = most recent
         if (!day.candles){
-          try {
-            const cj = await uwFetch(key, `/stock/${t}/ohlc/1m?date=${date}&limit=2500`); reqCount++;
-            const arr = (cj.data || cj).map(c => {
-              const st = c.start_time || c.market_time || '';
-              const dt = new Date(st);
-              const et = new Date(dt.toLocaleString('en-US', { timeZone: 'America/New_York' }));
-              const min = (et.getHours() - 9)*60 + et.getMinutes() - 30;
-              return [min, +c.open, +c.high, +c.low, +c.close, +(c.volume || 0)];
-            }).filter(c => c[0] >= 0 && c[0] < 390 && isFinite(c[4]));
-            if (arr.length > 50) day.candles = arr.sort((a,b) => a[0]-b[0]);
-          } catch (e){ /* skip day */ }
-        }
+          let got = false;
+          const sizes = daysFromEnd < 30 ? ['1m', '5m', '15m'] : ['5m', '15m', '1m'];
+          for (const size of sizes){
+            try {
+              const cj = await uwFetch(key, `/stock/${priceT}/ohlc/${size}?date=${date}&limit=2500`); reqCount++;
+              const arr = (cj.data || cj).map(c => {
+                const st = c.start_time || c.market_time || '';
+                const dt = new Date(st);
+                const et = new Date(dt.toLocaleString('en-US', { timeZone: 'America/New_York' }));
+                const min = (et.getHours() - 9)*60 + et.getMinutes() - 30;
+                return [min, +c.open*f, +c.high*f, +c.low*f, +c.close*f, +(c.volume || 0)];
+              }).filter(c => c[0] >= 0 && c[0] < 390 && isFinite(c[4]));
+              if (arr.length > 15){
+                day.candles = arr.sort((a,b) => a[0]-b[0]);
+                if (size !== '1m'){ day.tf = size; coarse++; }
+                got = true; break;
+              }
+            } catch (e){ /* try coarser */ }
+          }
+          if (got) cOk++; else cFail++;
+        } else cOk++;
         if (!day.ladder){
           try {
             const gj = await uwFetch(key, `/stock/${t}/greek-exposure/strike?date=${date}`); reqCount++;
@@ -2324,16 +2380,36 @@ async function runBackfill(){
               +(r.call_gamma_exposure ?? r.call_gex ?? r.call_gamma ?? 0),
               +(r.put_gamma_exposure ?? r.put_gex ?? r.put_gamma ?? 0)
             ]).filter(r => isFinite(r[0]) && r[0] > 0);
-            if (rows.length > 5) day.ladder = rows.sort((a,b) => a[0]-b[0]);
-          } catch (e){ /* skip */ }
-        }
+            if (rows.length > 5){ day.ladder = rows.sort((a,b) => a[0]-b[0]); lOk++; } else lFail++;
+          } catch (e){ lFail++; }
+        } else if (day.ladder) lOk++;
+        if (!day.spot){
+          try {
+            const sj = await uwFetch(key, `/stock/${t}/spot-exposures?date=${date}`); reqCount++;
+            const rows = (sj.data || sj).map(r => {
+              const et = new Date(new Date(r.time).toLocaleString('en-US', { timeZone: 'America/New_York' }));
+              const min = (et.getHours() - 9)*60 + et.getMinutes() - 30;
+              return [min, +r.price, +(r.gamma_per_one_percent_move_oi ?? 0), +(r.gamma_per_one_percent_move_vol ?? 0)];
+            }).filter(x => x[0] >= 0 && x[0] < 390 && isFinite(x[1]) && x[1] > 0);
+            if (rows.length > 30){
+              const m = new Map();
+              rows.forEach(x => m.set(x[0], x));   // last row per minute wins
+              day.spot = [...m.values()].sort((a,b) => a[0]-b[0]);
+              sOk++;
+            } else sFail++;
+          } catch (e){ sFail++; }
+        } else sOk++;
         done++;
-        if (done % 10 === 0 || done === tradingDays.length)
-          uwLog(`${t}: ${done}/${tradingDays.length} days (candles+ladders) · ${reqCount} requests total`);
+        if (done % 10 === 0 || done === tradingDays.length){
+          uwLog(`${t}: ${done}/${tradingDays.length} · candles ${cOk}✓/${cFail}✗ · ladders ${lOk}✓/${lFail}✗ · spot/min ${sOk}✓/${sFail}✗ · ${reqCount} req`);
+          refreshReplayPicker();
+        }
         await new Promise(res => setTimeout(res, 120));   // be polite
       }
-      const okDays = Object.values(T.days).filter(d => d.candles && d.ladder).length;
-      uwLog(`<b>${t} complete: ${okDays} days with both candles and ladder ✓</b>`);
+      const okDays = Object.values(T.days).filter(d => d.ladder && (d.candles || d.spot)).length;
+      uwLog(`<b>${t} complete: ${okDays} replayable days.</b> candles ${cOk}✓/${cFail}✗${coarse ? ' (' + coarse + ' days on 5m/15m bars)' : ''} · ladders ${lOk}✓/${lFail}✗ · spot-minute series ${sOk}✓/${sFail}✗` +
+        (cFail > lFail && sFail > lFail ? ' — intraday price history is the limiting side.' :
+         lFail > cFail ? ' — per-strike ladder history is the limiting side.' : ''));
     }
     uwLog(`<b>Backfill finished — ${reqCount} API requests used.</b> Save the data file, then regenerate your UW key.`);
   } catch (e){
@@ -2425,9 +2501,9 @@ function refreshReplayPicker(){
 function refreshReplayDates(){
   const t = $('rpTicker').value;
   const days = UWDATA.tickers[t].days;
-  const dates = Object.keys(days).filter(d => days[d].candles && days[d].ladder).sort().reverse();
-  $('rpDate').innerHTML = dates.map(d => `<option>${d}</option>`).join('');
-  $('rpInfo').textContent = dates.length + ' replayable days';
+  const dates = Object.keys(days).filter(d => days[d].ladder && (days[d].candles || days[d].spot)).sort().reverse();
+  $('rpDate').innerHTML = dates.map(d => `<option>${d}${days[d].spot ? ' ●' : ''}</option>`).join('');
+  $('rpInfo').textContent = dates.length + ' replayable days (● = recorded per-minute price & net GEX)';
 }
 $('rpTicker').addEventListener('change', refreshReplayDates);
 
@@ -2454,27 +2530,37 @@ function chainFromLadder(ladder, S0, iv){
   return { strikes: strikes.sort((a,b) => a.k - b.k), ivNow: iv, skew: 1.0, curve: 1.0 };
 }
 function startReplay(){
-  const t = $('rpTicker').value, date = $('rpDate').value;
+  const t = $('rpTicker').value, date = $('rpDate').value.replace(' ●', '');
   const D = UWDATA.tickers[t].days[date];
-  if (!D || !D.candles || !D.ladder) return;
-  // minute close series, gap-filled
-  const S = new Array(390), candles = new Array(390);
-  let last = D.candles[0][1];
-  const cmap = new Map(D.candles.map(c => [c[0], c]));
+  if (!D || !D.ladder || !(D.candles || D.spot)) return;
+  // minute series: exact recorded spot prices when available, candles otherwise
+  const S = new Array(390), candles = new Array(390), realNet = new Array(390).fill(null);
+  const smap = D.spot ? new Map(D.spot.map(r => [r[0], r])) : null;
+  const cmap = D.candles ? new Map(D.candles.map(c => [c[0], c])) : null;
+  let last = smap ? D.spot[0][1] : D.candles[0][1];
   for (let i = 0; i < 390; i++){
-    const c = cmap.get(i);
-    if (c){ S[i] = c[4]; candles[i] = { o: c[1], h: c[2], l: c[3], c: c[4] }; last = c[4]; }
-    else { S[i] = last; candles[i] = { o: last, h: last, l: last, c: last }; }
+    const sp = smap ? smap.get(i) : null;
+    const c = cmap ? cmap.get(i) : null;
+    const px = sp ? sp[1] : (c ? c[4] : last);
+    S[i] = px;
+    candles[i] = c ? { o: c[1], h: c[2], l: c[3], c: c[4] } : { o: last, h: Math.max(last, px), l: Math.min(last, px), c: px };
+    if (sp && isFinite(sp[2]) && sp[2] !== 0) realNet[i] = sp[2];
+    last = px;
   }
+  // carry recorded net GEX across missing minutes
+  for (let i = 1; i < 390; i++) if (realNet[i] === null) realNet[i] = realNet[i-1];
   const iv = estIVfromDaily(t, date);
   const ivArr = new Array(390);
   for (let i = 0; i < 390; i++) ivArr[i] = iv - (iv*0.12)*(i/390);
   const chain = chainFromLadder(D.ladder, S[0], iv);
   const sc = { type: 'replay', name: 'Replay ' + t + ' ' + date, hint: '', chain, spot0: S[0],
     ivOpen: iv, ivClose: ivArr[389], ivPath: ivArr, rvMult: 1, eventMin: null, eventBias: 0 };
-  startDay({ sc, S, iv: ivArr, gTrue: null, title: 'REPLAY ' + t + ' ' + date + ' (real candles + real ladder)',
-    isCase: false, caseObj: null, candles, isReplay: true });
-  coachSay(`<b>Real-day replay: ${t} ${date}.</b> Candles are the actual 1-minute tape; the gamma ladder is UW's real morning positioning, repriced as spot moves. Walls, flip and net GEX are real numbers. Premiums are Black-Scholes at ~${(iv*100).toFixed(0)}% IV (estimated from that month's realized vol) — realistic, not exchange quotes.`, 'info');
+  const hasSpot = !!D.spot;
+  startDay({ sc, S, iv: ivArr, gTrue: null, title: 'REPLAY ' + t + ' ' + date + (hasSpot ? ' (recorded price + net GEX)' : ' (real candles + real ladder)'),
+    isCase: false, caseObj: null, candles, isReplay: true, realNet: hasSpot ? realNet : null });
+  coachSay(`<b>Real-day replay: ${t} ${date}.</b> ${hasSpot ?
+    'Price is UW’s recorded per-minute series and the headline net GEX each minute is their actual recorded value — the per-strike pane is the real morning ladder repriced as spot moves.' :
+    'Candles are the actual tape; the gamma ladder is UW’s real morning positioning, repriced as spot moves.'} Premiums are Black-Scholes at ~${(iv*100).toFixed(0)}% IV (estimated from that month's realized vol) — realistic, not exchange quotes.`, 'info');
 }
 $('rpStartBtn').addEventListener('click', startReplay);
 
