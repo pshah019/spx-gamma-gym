@@ -1,0 +1,1810 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SPX Gamma Gym — 0DTE practice with a dealer-gamma coach</title>
+<style>
+:root{
+  color-scheme: dark;
+  --bg:#0d0d0d; --surface:#1a1a19; --surface2:#222221; --surface3:#2a2a28;
+  --ink:#ffffff; --ink2:#c3c2b7; --muted:#898781;
+  --grid:#2c2c2a; --axis:#383835; --border:rgba(255,255,255,.10);
+  --blue:#3987e5; --green:#0ca30c; --red:#e66767; --yellow:#c98500;
+  --violet:#9085e9; --orange:#d95926; --crit:#d03b3b; --aqua:#199e70;
+  --up:#0ca30c; --dn:#e66767;
+  --radius:10px;
+  font-size:15px;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;background:var(--bg);color:var(--ink);
+  font-family:system-ui,-apple-system,"Segoe UI",sans-serif;}
+h1,h2,h3,h4{font-weight:650;letter-spacing:-.01em}
+button{font:inherit;color:var(--ink);background:var(--surface3);border:1px solid var(--border);
+  border-radius:8px;padding:6px 12px;cursor:pointer}
+button:hover{background:#333331}
+button.primary{background:var(--blue);border-color:transparent;color:#fff;font-weight:600}
+button.primary:hover{background:#4a92e8}
+button.buy{background:#0f5c10;border-color:transparent;font-weight:600}
+button.buy:hover{background:#147015}
+button.sell{background:#7c2f2f;border-color:transparent;font-weight:600}
+button.sell:hover{background:#943a3a}
+button:disabled{opacity:.45;cursor:not-allowed}
+select,input,textarea{font:inherit;color:var(--ink);background:var(--surface2);
+  border:1px solid var(--border);border-radius:8px;padding:6px 10px}
+input[type=number]{width:76px}
+textarea{width:100%;min-height:130px;font-family:ui-monospace,Consolas,monospace;font-size:.8rem}
+.num{font-variant-numeric:tabular-nums}
+.up{color:var(--up)} .dn{color:var(--dn)} .mut{color:var(--muted)} .ink2{color:var(--ink2)}
+.small{font-size:.8rem}
+
+/* ---------- app frame ---------- */
+#topbar{display:flex;align-items:center;gap:14px;padding:10px 18px;border-bottom:1px solid var(--border);
+  background:var(--surface);position:sticky;top:0;z-index:50}
+#topbar .logo{font-weight:750;font-size:1.05rem;white-space:nowrap}
+#topbar .logo span{color:var(--yellow)}
+nav{display:flex;gap:4px;flex-wrap:wrap}
+nav button{background:transparent;border:none;color:var(--ink2);padding:7px 13px;border-radius:8px}
+nav button.active{background:var(--surface3);color:var(--ink);font-weight:600}
+#modeBadge{margin-left:auto;font-size:.8rem;color:var(--muted)}
+main{max-width:1420px;margin:0 auto;padding:14px 18px 60px}
+.tabpane{display:none}
+.tabpane.active{display:block}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px;margin-bottom:12px}
+.card h3{margin:0 0 8px;font-size:.95rem}
+.rowflex{display:flex;gap:12px;flex-wrap:wrap}
+.grow{flex:1 1 0;min-width:0}
+
+/* ---------- info tooltips (teach-as-you-go) ---------- */
+.q{display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;border-radius:50%;
+  background:var(--surface3);color:var(--ink2);font-size:.68rem;cursor:help;position:relative;
+  border:1px solid var(--border);vertical-align:2px;margin-left:4px}
+.q:hover::after{content:attr(data-tip);position:absolute;left:50%;bottom:130%;transform:translateX(-50%);
+  width:290px;background:#0a0a09;color:var(--ink2);border:1px solid var(--border);border-radius:8px;
+  padding:9px 11px;font-size:.78rem;line-height:1.45;z-index:100;white-space:normal;text-align:left;
+  box-shadow:0 6px 22px rgba(0,0,0,.5)}
+
+/* ---------- sim layout ---------- */
+#simhead{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:10px}
+#simhead .clock{font-size:1.15rem;font-weight:700}
+#simhead .spot{font-size:1.5rem;font-weight:750}
+.badge{display:inline-block;padding:3px 10px;border-radius:99px;font-size:.75rem;font-weight:700;letter-spacing:.03em}
+.badge.pos{background:rgba(12,163,12,.16);color:#43c943;border:1px solid rgba(12,163,12,.4)}
+.badge.neg{background:rgba(230,103,103,.14);color:#ef8a8a;border:1px solid rgba(230,103,103,.4)}
+.badge.zero{background:rgba(201,133,0,.14);color:#e0a63d;border:1px solid rgba(201,133,0,.45)}
+#simgrid{display:grid;grid-template-columns:minmax(0,1fr) 330px;gap:12px}
+@media (max-width:1000px){#simgrid{grid-template-columns:1fr}}
+#chartwrap{position:relative}
+canvas{display:block;width:100%;border-radius:var(--radius)}
+#priceCanvas{cursor:crosshair}
+#chartTip{position:absolute;pointer-events:none;background:#0a0a09;border:1px solid var(--border);
+  border-radius:8px;padding:7px 10px;font-size:.76rem;display:none;z-index:30;line-height:1.5;white-space:nowrap}
+.lvlLegend{display:flex;gap:14px;flex-wrap:wrap;font-size:.75rem;color:var(--ink2);margin-top:6px}
+.lvlLegend .k{display:inline-block;width:16px;height:0;border-top:2px solid;vertical-align:middle;margin-right:5px}
+table{width:100%;border-collapse:collapse;font-size:.8rem}
+th{color:var(--muted);font-weight:600;text-align:right;padding:4px 6px;border-bottom:1px solid var(--axis)}
+td{text-align:right;padding:4px 6px;border-bottom:1px solid var(--grid)}
+th:first-child,td:first-child{text-align:left}
+.statrow{display:flex;gap:10px;flex-wrap:wrap;margin:6px 0}
+.stat{background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:7px 11px;min-width:96px}
+.stat .lab{font-size:.68rem;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.stat .val{font-size:1.02rem;font-weight:700;margin-top:2px}
+#coachFeed{max-height:300px;overflow-y:auto;display:flex;flex-direction:column;gap:8px}
+.coachMsg{background:var(--surface2);border-left:3px solid var(--yellow);border-radius:6px;padding:8px 10px;font-size:.8rem;line-height:1.45}
+.coachMsg.warn{border-left-color:var(--crit)}
+.coachMsg.good{border-left-color:var(--green)}
+.coachMsg .t{color:var(--muted);font-size:.68rem;margin-bottom:2px}
+.ticket .strikes{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:8px 0}
+.ticket .qb{display:flex;gap:8px;margin-top:8px}
+.ticket .qb button{flex:1}
+#quoteLine{font-size:.85rem;margin-top:6px}
+
+/* ---------- modal ---------- */
+#modal{position:fixed;inset:0;background:rgba(0,0,0,.66);display:none;align-items:flex-start;justify-content:center;z-index:200;overflow-y:auto;padding:40px 16px}
+#modal.open{display:flex}
+#modalBox{background:var(--surface);border:1px solid var(--border);border-radius:14px;max-width:720px;width:100%;padding:22px 26px}
+.gradeBig{font-size:3rem;font-weight:800;line-height:1}
+.rubric td{font-size:.82rem}
+
+/* ---------- learn ---------- */
+.learn{max-width:840px;margin:0 auto;line-height:1.62;color:var(--ink2)}
+.learn h2{color:var(--ink);margin-top:30px;font-size:1.25rem}
+.learn h2 .num{color:var(--yellow);margin-right:6px}
+.learn strong{color:var(--ink)}
+.learn .figure{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px;margin:14px 0}
+.learn .figcap{font-size:.75rem;color:var(--muted);margin-top:6px;text-align:center}
+.callout{background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--blue);border-radius:8px;padding:10px 14px;margin:12px 0;font-size:.88rem}
+.callout.warn{border-left-color:var(--crit)}
+.playbook{width:100%;font-size:.84rem;margin:10px 0}
+.playbook td,.playbook th{text-align:left;vertical-align:top;line-height:1.5}
+kbd{background:var(--surface3);border:1px solid var(--border);border-radius:5px;padding:1px 6px;font-size:.78rem}
+
+/* ---------- cases ---------- */
+.caseGrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(310px,1fr));gap:12px}
+.caseCard{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;cursor:pointer;transition:border-color .15s}
+.caseCard:hover{border-color:var(--blue)}
+.caseCard h3{margin:0 0 4px}
+.caseCard .date{color:var(--yellow);font-size:.78rem;font-weight:700;letter-spacing:.04em}
+.caseCard p{color:var(--ink2);font-size:.83rem;line-height:1.5;margin:8px 0 0}
+.caseCard .tag{font-size:.7rem;padding:2px 8px;border-radius:99px;margin-top:10px;display:inline-block}
+#caseBrief{line-height:1.6;color:var(--ink2);font-size:.9rem}
+#caseBrief h4{color:var(--ink);margin:14px 0 4px}
+.disclose{font-size:.72rem;color:var(--muted);margin-top:10px;line-height:1.5}
+</style>
+</head>
+<body>
+<div id="topbar">
+  <div class="logo">SPX <span>Γ</span> Gamma Gym</div>
+  <nav>
+    <button data-tab="learn" class="active">Learn</button>
+    <button data-tab="sim">Practice Sim</button>
+    <button data-tab="cases">Case Studies</button>
+    <button data-tab="live">Live GEX</button>
+  </nav>
+  <div id="modeBadge">paper-trading trainer · not investment advice</div>
+</div>
+<main>
+
+<!-- ================= LEARN ================= -->
+<section class="tabpane active" id="tab-learn">
+<div class="learn">
+  <h1 style="margin-top:8px">Trading SPX with a Gamma-Exposure Map</h1>
+  <p>This trainer teaches one core idea: <strong>the biggest non-directional player in SPX — the options dealers — are forced to hedge, and their hedging changes how price moves.</strong> If you know their position (roughly), you know when the market tends to be sticky and when it tends to slide. Everything in the Practice Sim and Case Studies is built on the mechanics below. You can read this first or just start trading — the Coach will teach you as you go.</p>
+
+  <h2><span class="num">1.</span> Who are the dealers, and why must they hedge?</h2>
+  <p>When you buy an SPX call, a market maker (a “dealer”) usually sells it to you. Dealers don’t want directional risk — their business is collecting spreads, not betting on direction. So they immediately <strong>delta-hedge</strong>: sell you a call (they’re short delta as the market rises), and they buy futures/stock to stay neutral.</p>
+  <p>The hedge isn’t static. As SPX moves, the option’s delta changes — and the dealer must keep re-hedging. <strong>How fast delta changes is gamma.</strong></p>
+
+  <h2><span class="num">2.</span> Gamma decides whether dealers calm the market or shove it</h2>
+  <p>There are only two cases, and they produce opposite market “weather”:</p>
+  <table class="playbook">
+    <tr><th></th><th style="color:#43c943">Dealers LONG gamma (net GEX &gt; 0)</th><th style="color:#ef8a8a">Dealers SHORT gamma (net GEX &lt; 0)</th></tr>
+    <tr><td><strong>Their hedge</strong></td><td>Market rises → they <strong>sell</strong>. Market falls → they <strong>buy</strong>.</td><td>Market rises → they must <strong>buy</strong>. Market falls → they must <strong>sell</strong>.</td></tr>
+    <tr><td><strong>Effect on price</strong></td><td>Hedging <strong>opposes</strong> the move. Ranges compress, dips get bought, rallies get faded. “Pinning.”</td><td>Hedging <strong>amplifies</strong> the move. Trends extend, vol expands, air pockets appear.</td></tr>
+    <tr><td><strong>Typical days</strong></td><td>Quiet grind, OPEX pin days, low realized vol.</td><td>Crash days, squeezes, FOMC breaks, gap-and-go.</td></tr>
+    <tr><td><strong>0DTE playbook bias</strong></td><td>Fade edges, sell premium / spreads, respect walls, expect mean reversion.</td><td>Buy direction with the move, respect momentum, expect follow-through, size smaller (vol is higher).</td></tr>
+  </table>
+  <div class="callout">Positive gamma = the market has <strong>shock absorbers</strong>. Negative gamma = the market has a <strong>turbo strapped to whichever direction it’s already going</strong>.</div>
+
+  <h2><span class="num">3.</span> The GEX map: profile, walls, and the flip</h2>
+  <p><strong>Gamma exposure (GEX)</strong> estimates, strike by strike, how much hedging pressure lives at each price. For each option: <span class="num">Γ × Open Interest × 100 × S² × 1%</span> — the dollar amount dealers must trade per 1% SPX move. Add calls as positive and puts as negative (the standard “naive” convention — see lesson 6), and you get the profile you’ll see on every chart in this app:</p>
+  <div class="figure">
+    <svg viewBox="0 0 640 250" width="100%" role="img" aria-label="Diagram of a GEX profile with call wall, put wall and gamma flip">
+      <line x1="320" y1="16" x2="320" y2="222" stroke="#383835" stroke-width="1"/>
+      <g font-size="11" fill="#898781">
+        <text x="316" y="240" text-anchor="end">← dealers sell rallies / buy dips less</text>
+        <text x="326" y="240">strikes ↑ →</text>
+      </g>
+      <!-- put side bars (left = negative) -->
+      <g fill="#e66767">
+        <rect x="240" y="190" width="80" height="12" rx="3"/>
+        <rect x="200" y="170" width="120" height="12" rx="3"/>
+        <rect x="120" y="150" width="200" height="12" rx="3"/>
+        <rect x="252" y="130" width="68" height="12" rx="3"/>
+      </g>
+      <!-- call side bars -->
+      <g fill="#0ca30c">
+        <rect x="322" y="110" width="60" height="12" rx="3"/>
+        <rect x="322" y="90" width="130" height="12" rx="3"/>
+        <rect x="322" y="70" width="230" height="12" rx="3"/>
+        <rect x="322" y="50" width="90" height="12" rx="3"/>
+        <rect x="322" y="30" width="40" height="12" rx="3"/>
+      </g>
+      <g font-size="12" font-weight="700">
+        <text x="560" y="80" fill="#43c943">← CALL WALL</text>
+        <text x="112" y="146" fill="#ef8a8a" text-anchor="start"><tspan x="60" y="146">PUT</tspan><tspan x="60" y="160">WALL →</tspan></text>
+      </g>
+      <line x1="140" y1="122" x2="560" y2="122" stroke="#c98500" stroke-width="2" stroke-dasharray="6 4"/>
+      <text x="565" y="126" font-size="12" font-weight="700" fill="#e0a63d">GAMMA FLIP</text>
+    </svg>
+    <div class="figcap">A GEX-by-strike profile, rotated so strikes run vertically like a price axis (that’s how the sim draws it, aligned with the chart).</div>
+  </div>
+  <p>Three levels matter most:</p>
+  <p><strong>Call wall</strong> — the strike with the biggest positive gamma, usually above spot. Dealers get longer gamma as price approaches it and sell harder into strength. It acts like <strong>resistance / a magnet from below</strong>, and it’s where rallies stall on pin days.<br>
+  <strong>Put wall</strong> — the biggest negative-gamma strike below spot. It often acts as <strong>support</strong>, both because dealer hedging of the puts is concentrated there and because it’s where put sellers defend.<br>
+  <strong>Gamma flip (zero-gamma level)</strong> — the price where net dealer gamma crosses zero. <strong>Above it: stabilizing regime. Below it: amplifying regime.</strong> Crossing the flip is a regime change, not just another level break — the same 20-point move behaves completely differently on each side.</p>
+
+  <h2><span class="num">4.</span> The two-regime playbook you’ll be graded on</h2>
+  <p>The Coach grades your process, not just your P&amp;L. Its rubric is this playbook:</p>
+  <p><strong>In positive gamma:</strong> the tape mean-reverts. Buying calls right under the call wall is the classic mistake — you’re paying premium exactly where the dealer sell-wall lives. Higher-quality trades: fade moves into walls, or if you must own premium, own it near the middle of the range, take profits fast (50–100% on 0DTE is a win), and remember <strong>theta is your enemy all day</strong> because the market isn’t going anywhere.</p>
+  <p><strong>In negative gamma:</strong> the tape trends. Fading a move because it “looks extended” fights dealer flows that are pushing it further. Higher-quality trades: go <strong>with</strong> the move after the flip breaks, use the flip as your invalidation, and size down — realized vol might be 3–5× a pin day. IV is expensive, so consider debit spreads over naked longs.</p>
+  <p><strong>Always, on 0DTE:</strong> theta decay is brutal and nonlinear — an at-the-money SPX option loses value fastest in the final 90 minutes. Holding OTM lottery tickets into the last half hour is donating. The sim models this burn realistically; feel it.</p>
+
+  <h2><span class="num">5.</span> 0DTE option anatomy (what the ticket shows you)</h2>
+  <p><strong>Delta</strong>: your directional exposure — a 0.30-delta call gains ≈ $30 per contract per 1-point SPX move (×100 multiplier). <strong>Gamma</strong>: how fast that delta grows if the move continues — huge on 0DTE near the money. <strong>Theta</strong>: what you bleed per day just standing still; the sim shows it per-hour because on 0DTE a “day” is the whole life of the trade. <strong>IV</strong>: the price of the lottery ticket — it gets crushed after events and on pin days, and it spikes on breaks. You can be right on direction and still lose to IV crush + theta. SPX options are cash-settled at the close: no shares, just the difference in dollars.</p>
+
+  <h2><span class="num">6.</span> Honesty box: what GEX can and cannot tell you</h2>
+  <p>The standard GEX calculation makes a big simplifying assumption: <strong>dealers are long the calls and short the puts</strong> (because institutions mostly overwrite calls and buy protective puts). It’s often roughly right on index — but not always. In Feb 2023-style 0DTE call-buying frenzies, dealers were <em>short</em> the near-money calls, so what looked like a “call wall” was actually rocket fuel. The Case Studies include one of those days on purpose.</p>
+  <p>Other real-world caveats: GEX from open interest is a <em>morning snapshot</em> — intraday 0DTE flow can overwhelm it; vanna and charm (hedging flows from IV changes and time passing) matter too, especially into OPEX; and every vendor (SpotGamma, Menthor Q, GEXBot, etc.) uses slightly different assumptions, so levels differ a few points between them. Treat the map as <strong>context, not signals</strong>: it tells you the market’s temperament today, which trades are structurally favored, and where the important prices are. It does not tell you what will happen.</p>
+  <div class="callout warn">This is an educational simulator. Real 0DTE trading involves slippage, liquidity holes, and account-destroying tail risk that no sim fully reproduces. Nothing here is investment advice — it’s a gym.</div>
+
+  <p style="margin-top:26px"><button class="primary" onclick="switchTab('sim')">Start practicing →</button></p>
+</div>
+</section>
+
+<!-- ================= SIM ================= -->
+<section class="tabpane" id="tab-sim">
+  <div id="simhead">
+    <select id="scenarioSel" title="Scenario archetype">
+      <option value="random">🎲 Random (don't tell me)</option>
+      <option value="pin">Pin day (strong +gamma)</option>
+      <option value="trendDown">Downside break (−gamma)</option>
+      <option value="trendUp">Upside grind → squeeze</option>
+      <option value="fomc">Event day (FOMC 2:00 ET)</option>
+      <option value="squeeze0dte">0DTE call squeeze (trap)</option>
+    </select>
+    <button class="primary" id="newDayBtn">New day</button>
+    <span id="dayTitle" class="small" style="color:var(--yellow);font-weight:700"></span>
+    <span class="clock num" id="clock">9:30 ET</span>
+    <span class="spot num" id="spotLbl">—</span>
+    <span id="regimeBadge" class="badge zero">—</span>
+    <span style="flex:1"></span>
+    <span class="small mut">speed</span>
+    <button id="pauseBtn">▶</button>
+    <button data-speed="1" class="spd">1×</button>
+    <button data-speed="4" class="spd">4×</button>
+    <button data-speed="12" class="spd">12×</button>
+    <button id="stepBtn" title="advance one minute">+1m</button>
+    <label class="small ink2" style="display:flex;align-items:center;gap:5px">
+      <input type="checkbox" id="coachChk" checked> Coach
+    </label>
+  </div>
+
+  <div id="simgrid">
+    <div>
+      <div class="card" style="padding:10px">
+        <div id="chartwrap">
+          <canvas id="priceCanvas" height="430"></canvas>
+          <div id="chartTip"></div>
+        </div>
+        <div class="lvlLegend">
+          <span><span class="k" style="border-color:#3987e5"></span>SPX</span>
+          <span><span class="k" style="border-color:#0ca30c"></span>Call wall</span>
+          <span><span class="k" style="border-color:#e66767"></span>Put wall</span>
+          <span><span class="k" style="border-color:#c98500;border-top-style:dashed"></span>Gamma flip</span>
+          <span><span class="k" style="border-color:#9085e9;border-top-style:dotted"></span>Top magnet (max |GEX|)</span>
+          <span class="mut">right panel: GEX by strike (green calls / red puts)</span>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Positions <span class="q" data-tip="Marked to the option mid price. Greeks are live totals: Δ = P&L per 1 SPX point, Θ/hr = premium you bleed per hour at current IV if SPX sits still.">?</span></h3>
+        <table id="posTable"><thead><tr>
+          <th>Contract</th><th>Qty</th><th>Avg</th><th>Mark</th><th>Δ tot</th><th>Θ/hr</th><th>P&amp;L</th><th></th>
+        </tr></thead><tbody></tbody></table>
+        <div class="small mut" id="noPos">No open positions.</div>
+      </div>
+      <div class="card">
+        <h3>Trade log</h3>
+        <table id="blotter"><thead><tr>
+          <th>Time</th><th>Action</th><th>Contract</th><th>Qty</th><th>Price</th><th>Context</th>
+        </tr></thead><tbody></tbody></table>
+        <div class="small mut" id="noTrades">Nothing yet. Do some reps.</div>
+      </div>
+    </div>
+
+    <div>
+      <div class="card">
+        <h3>Dealer lens <span class="q" data-tip="Net GEX: estimated dealer gamma in $bn per 1% SPX move, summed across the chain at the current spot. Positive = dealers hedge against moves (stabilizing). Negative = dealers hedge with moves (amplifying).">?</span></h3>
+        <div class="statrow">
+          <div class="stat"><div class="lab">Net GEX</div><div class="val num" id="netGexLbl">—</div></div>
+          <div class="stat"><div class="lab">Gamma flip</div><div class="val num" id="flipLbl">—</div></div>
+        </div>
+        <div class="statrow">
+          <div class="stat"><div class="lab">Call wall</div><div class="val num up" id="cwLbl">—</div></div>
+          <div class="stat"><div class="lab">Put wall</div><div class="val num dn" id="pwLbl">—</div></div>
+        </div>
+        <canvas id="gexCurveCanvas" height="110"></canvas>
+        <div class="small mut" style="margin-top:4px">Net GEX vs. hypothetical spot — where the curve crosses zero is the flip. <span class="q" data-tip="This curve re-prices every option's gamma at each hypothetical SPX level. As spot moves along it you can watch the regime change coming before it happens.">?</span></div>
+      </div>
+
+      <div class="card ticket">
+        <h3>0DTE ticket <span class="q" data-tip="SPXW same-day expiry, cash settled at the 4:00 close. Fills at the displayed bid/ask. $100 multiplier, $0.66/contract each way in fees.">?</span></h3>
+        <div class="strikes">
+          <select id="cpSel"><option value="C">Call</option><option value="P">Put</option></select>
+          <select id="strikeSel"></select>
+          <input type="number" id="qtyInp" value="1" min="1" max="200">
+        </div>
+        <div id="quoteLine" class="num mut">—</div>
+        <div class="small mut num" id="greekLine">—</div>
+        <div class="qb">
+          <button class="buy" id="buyBtn">Buy</button>
+          <button class="sell" id="sellBtn">Sell</button>
+        </div>
+        <div class="statrow" style="margin-top:10px">
+          <div class="stat"><div class="lab">Cash</div><div class="val num" id="cashLbl">—</div></div>
+          <div class="stat"><div class="lab">Day P&amp;L</div><div class="val num" id="pnlLbl">—</div></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Coach</h3>
+        <div id="coachFeed"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= CASES ================= -->
+<section class="tabpane" id="tab-cases">
+  <h2 style="margin:6px 0 4px">Real days, replayed</h2>
+  <p class="ink2" style="max-width:860px;line-height:1.55;font-size:.9rem">Five real SPX sessions where dealer gamma was the story. You get the <strong>pre-open briefing traders actually had</strong> — the regime, the levels, the context — then the day replays minute by minute and you trade it with 0DTE options. Afterwards, a debrief tells you what actually happened and what the gamma lens got right (and wrong).</p>
+  <div class="disclose" style="max-width:860px">Data honesty: dates, direction, opens/closes and the day's story are real. Intraday paths are <strong>reconstructions</strong> anchored to the day's actual open/high/low/close (approximate to a few points), and GEX levels are approximations rebuilt from public post-mortems and commentary — not vendor-exact. Good enough to train the pattern; don't quote the levels.</div>
+  <div class="caseGrid" id="caseGrid" style="margin-top:14px"></div>
+  <div id="caseRun" style="display:none">
+    <button id="caseBack" style="margin:4px 0 10px">← All cases</button>
+    <div class="card"><div id="caseBrief"></div>
+      <p><button class="primary" id="caseStart">Open the market →</button></p>
+    </div>
+  </div>
+</section>
+
+<!-- ================= LIVE ================= -->
+<section class="tabpane" id="tab-live">
+  <h2 style="margin:6px 0 4px">Today's real SPX gamma map</h2>
+  <p class="ink2" style="max-width:860px;line-height:1.55;font-size:.9rem">This builds the same GEX profile from <strong>real CBOE delayed options data</strong> (free, ~15-min delay, includes real open interest, IV and gamma per strike). Use it before or during the session to see where today's walls and flip actually are — then practice against the same levels in the sim.</p>
+  <div class="card" style="max-width:880px">
+    <h3>Step 1 — get the data</h3>
+    <p class="small ink2" style="line-height:1.55">Click fetch. If your viewer blocks external requests (some app sandboxes do), open
+    <a href="https://cdn.cboe.com/api/global/delayed_quotes/options/_SPX.json" target="_blank" style="color:var(--blue)">cdn.cboe.com/api/global/delayed_quotes/options/_SPX.json</a>
+    in a browser tab, select-all → copy, and paste it below. (Tip: for SPX weeklys the feed already includes SPXW series.)</p>
+    <div class="rowflex">
+      <button class="primary" id="fetchLiveBtn">Fetch from CBOE</button>
+      <span class="small mut" id="liveStatus" style="align-self:center"></span>
+    </div>
+    <textarea id="livePaste" placeholder='…or paste the JSON here, then click Parse'></textarea>
+    <div class="rowflex" style="margin-top:8px;align-items:center">
+      <button id="parseLiveBtn">Parse pasted JSON</button>
+      <label class="small ink2">Expiry:
+        <select id="liveExpSel"><option value="0dte">Nearest (0DTE view)</option><option value="all">All expiries</option></select>
+      </label>
+    </div>
+  </div>
+  <div id="liveOut" style="display:none">
+    <div class="card">
+      <div id="simheadLive" class="statrow">
+        <div class="stat"><div class="lab">SPX spot</div><div class="val num" id="lvSpot">—</div></div>
+        <div class="stat"><div class="lab">Net GEX</div><div class="val num" id="lvNet">—</div></div>
+        <div class="stat"><div class="lab">Gamma flip</div><div class="val num" id="lvFlip">—</div></div>
+        <div class="stat"><div class="lab">Call wall</div><div class="val num up" id="lvCW">—</div></div>
+        <div class="stat"><div class="lab">Put wall</div><div class="val num dn" id="lvPW">—</div></div>
+        <div class="stat"><div class="lab">Regime</div><div class="val" id="lvRegime">—</div></div>
+      </div>
+      <canvas id="liveGexCanvas" height="460"></canvas>
+      <div class="small mut" style="margin-top:6px">Green = call GEX, red = put GEX (naive dealer convention). Hover for per-strike detail.</div>
+    </div>
+    <div class="card" style="max-width:880px">
+      <h3>Today's playbook (auto-generated)</h3>
+      <div id="livePlaybook" class="ink2" style="line-height:1.6;font-size:.88rem"></div>
+      <div class="disclose">Educational context only, built on the naive dealer-positioning assumption — not signals, not advice.</div>
+    </div>
+    <div class="card" style="max-width:880px">
+      <h3>Top gamma strikes</h3>
+      <table id="liveTable"><thead><tr><th>Strike</th><th>Call OI</th><th>Put OI</th><th>Call GEX $M/1%</th><th>Put GEX $M/1%</th><th>Net $M/1%</th></tr></thead><tbody></tbody></table>
+    </div>
+  </div>
+</section>
+</main>
+
+<!-- end-of-day modal -->
+<div id="modal"><div id="modalBox"></div></div>
+
+
+<script>
+/* ============================================================
+   SPX Gamma Gym — pure engine (no DOM). Node-testable.
+   Math: Black-Scholes, GEX profiles, scenario chains, price paths.
+   ============================================================ */
+
+/* ---------- seeded RNG ---------- */
+function mulberry32(seed){
+  let a = seed >>> 0;
+  return function(){
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function gaussMaker(rng){
+  let spare = null;
+  return function(){
+    if (spare !== null){ const v = spare; spare = null; return v; }
+    let u = 0, v = 0, s = 0;
+    do { u = rng()*2-1; v = rng()*2-1; s = u*u+v*v; } while (s >= 1 || s === 0);
+    const m = Math.sqrt(-2*Math.log(s)/s);
+    spare = v*m;
+    return u*m;
+  };
+}
+
+/* ---------- normal + Black-Scholes ---------- */
+const SQRT2PI = Math.sqrt(2*Math.PI);
+function nPdf(x){ return Math.exp(-0.5*x*x)/SQRT2PI; }
+/* erf-based normal CDF (Abramowitz–Stegun 7.1.26) */
+function erf(x){
+  const s = x < 0 ? -1 : 1; x = Math.abs(x);
+  const t = 1/(1+0.3275911*x);
+  const y = 1-((((( 1.061405429*t -1.453152027)*t)+1.421413741)*t -0.284496736)*t +0.254829592)*t*Math.exp(-x*x);
+  return s*y;
+}
+function normCdf(x){ return 0.5*(1+erf(x/Math.SQRT2)); }
+
+const YEAR_MIN = 252*390;      // trading minutes per year
+function bs(S, K, T, iv, isCall){
+  // r=q=0 (fine for 0DTE education). T in years, iv annualized.
+  T = Math.max(T, 1e-8); iv = Math.max(iv, 1e-4);
+  const sq = iv*Math.sqrt(T);
+  const d1 = (Math.log(S/K))/sq + 0.5*sq;
+  const d2 = d1 - sq;
+  const call = S*normCdf(d1) - K*normCdf(d2);
+  const price = isCall ? call : call - S + K;      // put-call parity, r=0
+  const delta = isCall ? normCdf(d1) : normCdf(d1)-1;
+  const gamma = nPdf(d1)/(S*sq);
+  const thetaYr = -(S*nPdf(d1)*iv)/(2*Math.sqrt(T)); // per year
+  return { price: Math.max(price, 0), delta, gamma, thetaDay: thetaYr/252 };
+}
+
+/* ---------- IV smile ---------- */
+function smileIV(base, K, S, skew, curve){
+  const m = Math.log(K/S);
+  return Math.max(0.03, base*(1 - skew*m*10 + curve*m*m*260));
+}
+
+/* ---------- GEX math ----------
+   Per option: $GEX per 1% move = Γ · OI · 100 (multiplier) · S² · 0.01
+   naive convention: calls dealer-long (+), puts dealer-short (−)
+   strike rows: {k, cOI, pOI, cSign, pSign}  sign = dealer side (+1 long γ)
+---------------------------------- */
+function gexAtSpot(chain, S, T, useTrueSigns){
+  let net = 0;
+  for (const r of chain.strikes){
+    const ivc = smileIV(chain.ivNow, r.k, S, chain.skew, chain.curve);
+    const g = bs(S, r.k, T, ivc, true).gamma;         // gamma same for C & P
+    const unit = g * 100 * S * S * 0.01;
+    const cs = useTrueSigns ? r.cSign : 1;
+    const ps = useTrueSigns ? r.pSign : -1;
+    net += unit * (r.cOI * cs + r.pOI * ps);
+  }
+  return net;   // dollars per 1% move
+}
+function gexProfile(chain, S, T, useTrueSigns){
+  const rows = [];
+  for (const r of chain.strikes){
+    const ivc = smileIV(chain.ivNow, r.k, S, chain.skew, chain.curve);
+    const g = bs(S, r.k, T, ivc, true).gamma;
+    const unit = g * 100 * S * S * 0.01;
+    const cs = useTrueSigns ? r.cSign : 1;
+    const ps = useTrueSigns ? r.pSign : -1;
+    rows.push({ k: r.k, cGex: unit*r.cOI*cs, pGex: unit*r.pOI*ps, cOI: r.cOI, pOI: r.pOI });
+  }
+  return rows;
+}
+function gexCurve(chain, S0, T, useTrueSigns, span){
+  span = span || 0.045;
+  const xs = [], ys = [];
+  const N = 61;
+  for (let i=0;i<N;i++){
+    const s = S0*(1-span) + S0*2*span*i/(N-1);
+    xs.push(s); ys.push(gexAtSpot(chain, s, T, useTrueSigns));
+  }
+  // zero crossing nearest S0
+  let flip = null, best = Infinity;
+  for (let i=1;i<N;i++){
+    if ((ys[i-1] <= 0 && ys[i] > 0) || (ys[i-1] >= 0 && ys[i] < 0)){
+      const f = xs[i-1] + (xs[i]-xs[i-1]) * (0 - ys[i-1])/(ys[i]-ys[i-1]);
+      if (Math.abs(f - S0) < best){ best = Math.abs(f-S0); flip = f; }
+    }
+  }
+  return { xs, ys, flip };
+}
+function keyLevels(chain, S, T){
+  const prof = gexProfile(chain, S, T, false);      // levels from the NAIVE map (what tools display)
+  let cw = null, cwv = 0, pw = null, pwv = 0, mag = null, magv = 0;
+  for (const r of prof){
+    if (r.cGex > cwv){ cwv = r.cGex; cw = r.k; }
+    if (r.pGex < pwv){ pwv = r.pGex; pw = r.k; }
+    const tot = Math.abs(r.cGex) + Math.abs(r.pGex);
+    if (tot > magv){ magv = tot; mag = r.k; }
+  }
+  const curve = gexCurve(chain, S, T, false);
+  return { callWall: cw, putWall: pw, magnet: mag, flip: curve.flip, curve,
+           net: gexAtSpot(chain, S, T, false) };
+}
+
+/* ---------- chain construction ---------- */
+function strikeGrid(spot){
+  const c = Math.round(spot/5)*5;
+  const ks = new Set();
+  for (let k=c-Math.round(spot*0.012/5)*5; k<=c+Math.round(spot*0.012/5)*5; k+=5) ks.add(k);
+  for (let k=c-Math.round(spot*0.025/10)*10; k<=c+Math.round(spot*0.025/10)*10; k+=10) ks.add(k);
+  for (let k=Math.round(spot*0.955/25)*25; k<=Math.round(spot*1.045/25)*25; k+=25) ks.add(k);
+  return [...ks].sort((a,b)=>a-b);
+}
+function baseOI(k, spot, rng, side){
+  // side: 'c' or 'p'; distance-decaying OI with round-number boosts
+  const d = (k - spot)/spot;
+  const rightSide = side==='c' ? Math.exp(-Math.pow((d-0.006)/0.016,2)) : Math.exp(-Math.pow((d+0.008)/0.018,2));
+  let oi = 260 + 2100*rightSide;
+  if (k % 25 === 0) oi *= 1.7;
+  if (k % 100 === 0) oi *= 2.1;
+  oi *= (0.6 + 0.8*rng());
+  return Math.round(oi);
+}
+function makeChain(spot, rng, opts){
+  opts = opts || {};
+  const strikes = strikeGrid(spot).map(k => ({
+    k,
+    cOI: baseOI(k, spot, rng, 'c'),
+    pOI: baseOI(k, spot, rng, 'p'),
+    cSign: 1, pSign: -1
+  }));
+  const chain = {
+    strikes,
+    ivNow: opts.ivBase || 0.13,
+    skew: opts.skew !== undefined ? opts.skew : 0.9,
+    curve: opts.curve !== undefined ? opts.curve : 0.9
+  };
+  return chain;
+}
+function addCluster(chain, k0, side, amount){
+  let best = null, bd = Infinity;
+  for (const r of chain.strikes){
+    const d = Math.abs(r.k - k0);
+    if (d < bd){ bd = d; best = r; }
+  }
+  if (best){ if (side==='c') best.cOI += amount; else best.pOI += amount; }
+  return best ? best.k : k0;
+}
+function scaleSide(chain, side, mult){
+  for (const r of chain.strikes){ if (side==='c') r.cOI = Math.round(r.cOI*mult); else r.pOI = Math.round(r.pOI*mult); }
+}
+/* tune total put OI so the naive flip lands near targetFlip */
+function tuneFlip(chain, spot, T, targetFlip){
+  let lo = 0.2, hi = 6;
+  const base = chain.strikes.map(r => r.pOI);
+  for (let it=0; it<18; it++){
+    const mid = (lo+hi)/2;
+    chain.strikes.forEach((r,i) => r.pOI = Math.round(base[i]*mid));
+    const f = gexCurve(chain, spot, T, false).flip;
+    if (f === null){ // all positive => need more puts
+      if (gexAtSpot(chain, spot, T, false) > 0) lo = mid; else hi = mid;
+      continue;
+    }
+    if (f < targetFlip) lo = mid; else hi = mid;
+  }
+}
+
+/* ---------- scenarios ---------- */
+const T0 = 390/YEAR_MIN;   // one full session in years
+function makeScenario(type, seed){
+  const rng = mulberry32(seed);
+  const gz = gaussMaker(rng);
+  const spot0 = Math.round((6150 + rng()*300)/5)*5;
+  let chain, name, ivOpen, ivClose, rvMult, eventMin = null, eventBias = 0, hint = '';
+  switch(type){
+    case 'pin': {
+      chain = makeChain(spot0, rng, { ivBase: 0.115, skew: 0.8, curve: 0.8 });
+      const cw = addCluster(chain, Math.round(spot0*1.005/25)*25, 'c', 6800 + rng()*2400);
+      addCluster(chain, Math.round(spot0*0.988/25)*25, 'p', 4800 + rng()*1900);
+      tuneFlip(chain, spot0, T0, spot0*(0.982 - rng()*0.006));
+      name = 'Quiet tape'; ivOpen = 0.115; ivClose = 0.085; rvMult = 0.62;
+      hint = 'OPEX-style morning: open interest is enormous and concentrated.';
+      break;
+    }
+    case 'trendDown': {
+      chain = makeChain(spot0, rng, { ivBase: 0.235, skew: 1.3, curve: 1.0 });
+      addCluster(chain, Math.round(spot0*1.012/25)*25, 'c', 4200);
+      addCluster(chain, Math.round(spot0*0.972/25)*25, 'p', 6400 + rng()*2400);
+      tuneFlip(chain, spot0, T0, spot0*(1.006 + rng()*0.005));   // flip ABOVE spot → negative regime
+      name = 'Risk-off open'; ivOpen = 0.235; ivClose = 0.30; rvMult = 1.5; eventBias = -1;
+      hint = 'Futures soft overnight; vol bid; spot opens below the flip.';
+      break;
+    }
+    case 'trendUp': {
+      chain = makeChain(spot0, rng, { ivBase: 0.135, skew: 0.7, curve: 0.8 });
+      addCluster(chain, Math.round(spot0*1.009/25)*25, 'c', 3900);
+      tuneFlip(chain, spot0, T0, spot0*(0.99 - rng()*0.004));
+      name = 'Grind-up tape'; ivOpen = 0.135; ivClose = 0.105; rvMult = 0.85; eventBias = +0.4;
+      hint = 'Mild positive gamma, but the call wall is close overhead.';
+      break;
+    }
+    case 'fomc': {
+      chain = makeChain(spot0, rng, { ivBase: 0.16, skew: 1.0, curve: 1.1 });
+      addCluster(chain, Math.round(spot0*1.008/25)*25, 'c', 4800);
+      addCluster(chain, Math.round(spot0*0.985/25)*25, 'p', 4500);
+      tuneFlip(chain, spot0, T0, spot0*(0.991 - rng()*0.003));
+      name = 'FOMC day'; ivOpen = 0.165; ivClose = 0.13; rvMult = 0.55;
+      eventMin = 270; eventBias = (rng() < 0.5 ? -1.4 : 1.1);
+      hint = 'Decision at 2:00 ET. Morning should be dead — the afternoon decides the day.';
+      break;
+    }
+    case 'squeeze0dte': {
+      chain = makeChain(spot0, rng, { ivBase: 0.15, skew: 0.6, curve: 0.9 });
+      const cwk = addCluster(chain, Math.round(spot0*1.006/25)*25, 'c', 5500);
+      addCluster(chain, Math.round(spot0*1.012/25)*25, 'c', 3200);
+      tuneFlip(chain, spot0, T0, spot0*(0.988 - rng()*0.004));
+      // the trap: near/above-money calls are CUSTOMER-bought → dealers short them
+      for (const r of chain.strikes){
+        if (r.k >= spot0*0.999 && r.k <= spot0*1.018) r.cSign = -1;
+      }
+      name = 'Heavy call volume'; ivOpen = 0.15; ivClose = 0.17; rvMult = 1.15; eventBias = +1.2;
+      hint = 'The map shows a fat call wall overhead… but the tape says call BUYERS are aggressive today.';
+      break;
+    }
+    default: return makeScenario(['pin','trendDown','trendUp','fomc','squeeze0dte'][Math.floor(rng()*5)], seed+7);
+  }
+  return { type, name, hint, spot0, chain, ivOpen, ivClose, rvMult, eventMin, eventBias, seed, rng, gz };
+}
+
+/* ---------- price path generation ---------- */
+function uShape(i){ return 1 + 0.9*Math.exp(-i/40) + 0.8*Math.exp(-(389-i)/45); }
+
+function genScenarioPath(sc){
+  const N = 390;
+  const S = new Array(N), ivArr = new Array(N), gArr = new Array(N);
+  let s = sc.spot0, ema = 0;
+  // gamma scale: typical |net| across curve
+  const cv = gexCurve(sc.chain, sc.spot0, T0, true);
+  const scale = Math.max(2e8, cv.ys.reduce((a,y)=>a+Math.abs(y),0)/cv.ys.length);
+  for (let i=0;i<N;i++){
+    const T = Math.max((N - i)/YEAR_MIN, 1e-8);
+    // iv path (linear + event adjustments)
+    let iv = sc.ivOpen + (sc.ivClose - sc.ivOpen)*(i/N);
+    sc.chain.ivNow = iv;
+    const Gn = gexAtSpot(sc.chain, s, T, true)/scale;
+    gArr[i] = Gn;
+    const sigMin = iv/Math.sqrt(YEAR_MIN) * uShape(i) * sc.rvMult;
+    let drift = 0, sig = sigMin;
+    if (Gn > 0){
+      // pull toward magnet, damp vol
+      const lv = keyLevelsCache(sc, s, T);
+      drift += 0.05*Math.min(Gn,1.6) * (lv.magnet - s)/s / 60;
+      sig *= 1/(1 + 0.5*Math.min(Gn, 2));
+      // wall repulsion
+      if (lv.callWall && s < lv.callWall){
+        const d = (lv.callWall - s)/s;
+        if (d < 0.004) drift -= sigMin*0.9*(1 - d/0.004);
+      }
+      if (lv.putWall && s > lv.putWall){
+        const d = (s - lv.putWall)/s;
+        if (d < 0.004) drift += sigMin*0.9*(1 - d/0.004);
+      }
+    } else {
+      sig *= (1 + 0.55*Math.min(-Gn, 1.8));
+      drift += 0.32*ema*Math.min(-Gn, 1.8);
+      drift += sc.eventBias*sigMin*0.13;
+    }
+    if (sc.eventMin !== null && i === sc.eventMin){
+      const shock = sc.eventBias*(1.2 + Math.abs(sc.gz())*0.9)*iv/Math.sqrt(252)*0.35;
+      s *= (1 + shock);
+      iv = Math.max(0.08, iv*(sc.eventBias < 0 ? 1.35 : 0.72));
+      sc.ivClose = Math.max(0.07, iv*(sc.eventBias < 0 ? 1.05 : 0.8));
+      sc.ivOpen = iv + (sc.ivOpen - sc.ivClose)*0; // freeze: from here linear iv→ivClose
+    }
+    const ret = drift + sig*sc.gz();
+    ema = 0.75*ema + 0.25*ret;
+    s = s*(1 + ret);
+    S[i] = s; ivArr[i] = iv;
+  }
+  return { S, iv: ivArr, gArr };
+}
+/* cache key levels during path gen (recompute every 15 min) */
+let _klC = { min: -99, lv: null, sc: null };
+function keyLevelsCache(sc, s, T){
+  const bucket = Math.floor((390 - T*YEAR_MIN)/15);
+  if (_klC.sc !== sc || _klC.min !== bucket){
+    _klC = { min: bucket, sc, lv: keyLevels(sc.chain, s, T) };
+  }
+  return _klC.lv;
+}
+
+/* ---------- Brownian bridge path for case studies ---------- */
+function bridgePath(anchors, dayVolPct, seed, hiTarget, loTarget){
+  // anchors: [[minute, price], ...] must include 0 and 389
+  const rng = mulberry32(seed), gz = gaussMaker(rng);
+  const N = 390, S = new Array(N);
+  anchors = anchors.slice().sort((a,b)=>a[0]-b[0]);
+  for (let a=0; a<anchors.length-1; a++){
+    const [m0, p0] = anchors[a], [m1, p1] = anchors[a+1];
+    const L = m1 - m0;
+    let prev = Math.log(p0);
+    const target = Math.log(p1);
+    for (let j=0; j<=L; j++){
+      const i = m0 + j;
+      if (j === 0){ S[i] = p0; continue; }
+      const remain = L - j + 1;
+      const sig = (dayVolPct/100)/Math.sqrt(390) * uShape(i) * 0.9;
+      const pull = (target - prev)/remain;
+      prev = prev + pull + sig*gz()*Math.sqrt((remain-1)/remain);
+      S[i] = Math.exp(prev);
+    }
+    S[m1] = p1;
+  }
+  // gently rescale to touch hi/lo targets
+  if (hiTarget || loTarget){
+    let hi = -Infinity, lo = Infinity, hiI = 0, loI = 0;
+    for (let i=0;i<N;i++){ if (S[i]>hi){hi=S[i];hiI=i;} if (S[i]<lo){lo=S[i];loI=i;} }
+    const anchorSet = new Set(anchors.map(a=>a[0]));
+    const bumps = [];
+    if (hiTarget && hi < hiTarget) bumps.push({ i: hiI, amt: hiTarget - hi });
+    if (loTarget && lo > loTarget) bumps.push({ i: loI, amt: loTarget - lo });
+    for (const b of bumps){
+      // add a tent function centered at b.i, zero at nearest anchors
+      let left = 0, right = 389;
+      for (const a of anchors){ if (a[0] < b.i) left = Math.max(left, a[0]); if (a[0] > b.i) right = Math.min(right, a[0]); }
+      for (let i=left; i<=right; i++){
+        const w = i <= b.i ? (i-left)/Math.max(1,b.i-left) : (right-i)/Math.max(1,right-b.i);
+        S[i] += b.amt*w;
+      }
+    }
+  }
+  return S;
+}
+
+/* ---------- option quoting / fills ---------- */
+function quote(S, K, T, iv, isCall){
+  const b = bs(S, K, T, iv, isCall);
+  const half = Math.max(0.05, b.price*0.012);
+  // theta per hour, numerical (robust at tiny T)
+  const dtH = 60/YEAR_MIN;
+  const later = bs(S, K, Math.max(T-dtH,1e-9), iv, isCall);
+  return {
+    mid: b.price, bid: Math.max(0, b.price - half), ask: b.price + half,
+    delta: b.delta, gamma: b.gamma, thetaHr: later.price - b.price, iv
+  };
+}
+const FEE = 0.66; // per contract per side
+
+/* ---------- CBOE live data parsing ---------- */
+function parseCboe(json, mode, nowMs){
+  const d = json && json.data ? json.data : json;
+  if (!d || !d.options) throw new Error('Unrecognized JSON — expected CBOE delayed_quotes format with data.options[]');
+  const spot = d.current_price || d.close || d.last || null;
+  const re = /^(SPXW?|SPX)(\d{2})(\d{2})(\d{2})([CP])(\d{8})$/;
+  const byExp = new Map();
+  for (const o of d.options){
+    const m = re.exec((o.option||'').trim());
+    if (!m) continue;
+    const exp = `20${m[2]}-${m[3]}-${m[4]}`;
+    const strike = parseInt(m[6],10)/1000;
+    const isCall = m[5] === 'C';
+    if (!byExp.has(exp)) byExp.set(exp, []);
+    byExp.get(exp).push({ exp, strike, isCall, oi: o.open_interest||0, iv: o.iv||0, gamma: o.gamma||0 });
+  }
+  const exps = [...byExp.keys()].sort();
+  if (!exps.length) throw new Error('No SPX/SPXW options parsed');
+  const today = new Date(nowMs);
+  const todayStr = today.getFullYear()+'-'+String(today.getMonth()+1).padStart(2,'0')+'-'+String(today.getDate()).padStart(2,'0');
+  let use;
+  if (mode === 'all') use = exps;
+  else {
+    const fut = exps.filter(e => e >= todayStr);
+    use = [fut.length ? fut[0] : exps[exps.length-1]];
+  }
+  const rows = new Map(); // strike -> {cOI,pOI,cGex,pGex}
+  let net = 0;
+  const S = spot || 0;
+  const opts = [];
+  for (const e of use){
+    for (const o of byExp.get(e)){
+      opts.push(o);
+      if (!rows.has(o.strike)) rows.set(o.strike, { k: o.strike, cOI:0, pOI:0, cGex:0, pGex:0 });
+      const r = rows.get(o.strike);
+      const unit = (o.gamma||0) * 100 * S * S * 0.01 * o.oi;
+      if (o.isCall){ r.cOI += o.oi; r.cGex += unit; net += unit; }
+      else { r.pOI += o.oi; r.pGex -= unit; net -= unit; }
+    }
+  }
+  const profile = [...rows.values()].sort((a,b)=>a.k-b.k)
+    .filter(r => S ? (r.k > S*0.9 && r.k < S*1.1) : true);
+  // levels
+  let cw=null,cwv=0,pw=null,pwv=0;
+  for (const r of profile){
+    if (r.cGex>cwv){cwv=r.cGex;cw=r.k;}
+    if (r.pGex<pwv){pwv=r.pGex;pw=r.k;}
+  }
+  // flip: reprice gamma across hypothetical spots using each option's iv & T
+  const expMs = {}; use.forEach(e => { expMs[e] = new Date(e+'T16:00:00-05:00').getTime(); });
+  function netAt(s){
+    let n = 0;
+    for (const o of opts){
+      if (!o.oi) continue;
+      const T = Math.max((expMs[o.exp]-nowMs)/(365*24*3600e3), 1e-5);
+      const iv = o.iv > 0.01 ? o.iv : 0.15;
+      const g = bs(s, o.strike, T, iv, true).gamma;
+      n += g*100*s*s*0.01*o.oi*(o.isCall ? 1 : -1);
+    }
+    return n;
+  }
+  let flip = null;
+  if (S){
+    let prev = netAt(S*0.94);
+    for (let i=1;i<=48;i++){
+      const s = S*0.94 + S*0.12*i/48;
+      const cur = netAt(s);
+      if ((prev<=0&&cur>0)||(prev>=0&&cur<0)){
+        const s0 = S*0.94 + S*0.12*(i-1)/48;
+        flip = s0 + (s-s0)*(0-prev)/(cur-prev);
+        if (Math.abs(flip-S) < S*0.06) break;
+      }
+      prev = cur;
+    }
+  }
+  return { spot: S, expiries: use, allExpiries: exps, profile, net, callWall: cw, putWall: pw, flip,
+           optionCount: opts.length };
+}
+
+/* node export for tests */
+if (typeof module !== 'undefined') module.exports = {
+  mulberry32, gaussMaker, bs, normCdf, smileIV, gexAtSpot, gexProfile, gexCurve,
+  keyLevels, makeChain, makeScenario, genScenarioPath, bridgePath, quote, parseCboe,
+  strikeGrid, tuneFlip, addCluster, T0, YEAR_MIN, FEE
+};
+
+/* browser glue: expose engine as E (matches the node test harness) */
+const E = { mulberry32, gaussMaker, bs, normCdf, smileIV, gexAtSpot, gexProfile, gexCurve,
+  keyLevels, makeChain, makeScenario, genScenarioPath, bridgePath, quote, parseCboe,
+  strikeGrid, tuneFlip, addCluster, T0, YEAR_MIN, FEE };
+/* ============================================================
+   SPX Gamma Gym — app layer (DOM, charts, trading, coach, cases)
+   ============================================================ */
+'use strict';
+
+/* ---------- helpers ---------- */
+const $ = id => document.getElementById(id);
+const fmt$ = v => (v<0?'-$':'$') + Math.abs(v).toLocaleString(undefined,{maximumFractionDigits:0});
+const fmt2 = v => v.toLocaleString(undefined,{minimumFractionDigits:2, maximumFractionDigits:2});
+const fmtBn = v => (v/1e9 >= 0 ? '+' : '−') + '$' + Math.abs(v/1e9).toFixed(1) + 'bn';
+const fmtPx = v => v.toLocaleString(undefined,{maximumFractionDigits:0});
+function minToClock(i){
+  const t = 9*60+30 + i;
+  const h = Math.floor(t/60), m = t%60;
+  const h12 = ((h+11)%12)+1;
+  return `${h12}:${String(m).padStart(2,'0')} ${h>=12?'PM':'AM'} ET`;
+}
+
+/* ---------- tabs ---------- */
+function switchTab(name){
+  document.querySelectorAll('nav button').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
+  document.querySelectorAll('.tabpane').forEach(p => p.classList.toggle('active', p.id === 'tab-'+name));
+  if (name === 'sim' && !DAY) newDay();
+  if (name === 'cases') renderCaseGrid();
+}
+document.querySelectorAll('nav button').forEach(b => b.addEventListener('click', () => switchTab(b.dataset.tab)));
+
+/* ============================================================
+   DAY STATE
+============================================================ */
+let DAY = null;
+let timer = null, speed = 0;   // bars per second; 0 = paused
+const START_CASH = 25000;
+
+function buildLevelTimeline(sc, S){
+  // naive-map levels + naive net, every 15 minutes (what the trader "sees")
+  const buckets = [];
+  for (let b=0; b*15 < 390; b++){
+    const i = Math.min(b*15, 389);
+    const T = Math.max((390-i)/E.YEAR_MIN, 1e-8);
+    sc.chain.ivNow = sc.ivPath ? sc.ivPath[i] : sc.ivOpen;
+    const lv = E.keyLevels(sc.chain, S[i], T);
+    buckets.push(lv);
+  }
+  return buckets;
+}
+function lvAt(i){ return DAY.lvT[Math.min(Math.floor(i/15), DAY.lvT.length-1)]; }
+
+function newDay(){
+  const type = $('scenarioSel').value;
+  const seed = (Math.random()*1e9)|0;
+  const sc = E.makeScenario(type, seed);
+  const path = E.genScenarioPath(sc);
+  sc.ivPath = path.iv;
+  startDay({
+    sc, S: path.S, iv: path.iv, gTrue: path.gArr,
+    title: type === 'random' ? 'Mystery day' : sc.name,
+    isCase: false, caseObj: null
+  });
+}
+
+function startDay(cfg){
+  yState = { lo: null, hi: null };
+  DAY = {
+    ...cfg,
+    i: 0,
+    cash: START_CASH, realized: 0,
+    positions: new Map(),      // key cp+K -> {cp,K,qty,avg}
+    trades: [], equity: [START_CASH],
+    coachFlags: {}, done: false,
+    lvT: buildLevelTimeline(cfg.sc, cfg.S)
+  };
+  setSpeed(0);
+  $('dayTitle').textContent = cfg.isCase ? '◆ ' + cfg.title : '';
+  $('coachFeed').innerHTML = '';
+  $('blotter').querySelector('tbody').innerHTML = '';
+  $('noTrades').style.display = '';
+  populateStrikes();
+  coachSay(openingBriefing(), 'info');
+  if (cfg.isCase && cfg.caseObj.coachOpen) coachSay(cfg.caseObj.coachOpen, 'info');
+  else if (!cfg.isCase && DAY.sc.hint && $('scenarioSel').value !== 'random') coachSay('Scenario hint: ' + DAY.sc.hint, 'info');
+  refreshAll();
+  switchTab('sim');
+}
+
+function currentT(){ return Math.max((390 - DAY.i)/E.YEAR_MIN, 1e-8); }
+function spot(){ return DAY.S[DAY.i]; }
+
+/* ---------- speed / clock ---------- */
+function setSpeed(s){
+  speed = s;
+  if (timer){ clearInterval(timer); timer = null; }
+  $('pauseBtn').textContent = s === 0 ? '▶' : '⏸';
+  document.querySelectorAll('.spd').forEach(b => b.style.outline = (+b.dataset.speed === s) ? '2px solid var(--blue)' : 'none');
+  if (s > 0) timer = setInterval(advance, 1000/s);
+}
+$('pauseBtn').addEventListener('click', () => setSpeed(speed === 0 ? (lastSpeed||1) : 0));
+let lastSpeed = 1;
+document.querySelectorAll('.spd').forEach(b => b.addEventListener('click', () => { lastSpeed = +b.dataset.speed; setSpeed(lastSpeed); }));
+$('stepBtn').addEventListener('click', () => { if (!DAY.done) { advance(); } });
+$('newDayBtn').addEventListener('click', newDay);
+
+function advance(){
+  if (!DAY || DAY.done) return;
+  if (DAY.i >= 389){ endDay(); return; }
+  DAY.i++;
+  DAY.sc.chain.ivNow = DAY.iv[DAY.i];
+  if (DAY.i % 30 === 0) populateStrikes();   // keep the strike list near the money on trend days
+  markEquity();
+  coachTick();
+  refreshAll();
+  if (DAY.i >= 389) endDay();
+}
+
+/* ---------- quotes & trading ---------- */
+function optQuote(cp, K){
+  const S = spot(), T = currentT();
+  const iv = E.smileIV(DAY.iv[DAY.i], K, S, DAY.sc.chain.skew, DAY.sc.chain.curve);
+  return E.quote(S, K, T, iv, cp === 'C');
+}
+function populateStrikes(){
+  const S = spot();
+  const atm = Math.round(S/5)*5;
+  const sel = $('strikeSel');
+  const prev = sel.value;
+  sel.innerHTML = '';
+  for (let k = atm-60; k <= atm+60; k += 5){
+    const o = document.createElement('option');
+    o.value = k; o.textContent = k;
+    sel.appendChild(o);
+  }
+  sel.value = [...sel.options].some(o => o.value === prev) ? prev : atm;
+}
+function refreshTicket(){
+  const cp = $('cpSel').value, K = +$('strikeSel').value;
+  if (!K) return;
+  const q = optQuote(cp, K);
+  $('quoteLine').innerHTML = `<b>${K}${cp}</b> &nbsp; bid <b class="dn">${fmt2(q.bid)}</b> × ask <b class="up">${fmt2(q.ask)}</b> &nbsp; <span class="mut">IV ${(q.iv*100).toFixed(1)}%</span>`;
+  $('greekLine').textContent = `Δ ${q.delta.toFixed(2)}  ·  Γ ${q.gamma.toFixed(4)}  ·  Θ ${fmt2(q.thetaHr)}/hr  ·  ≈$${Math.round(Math.abs(q.thetaHr)*100)}/hr per contract`;
+}
+$('cpSel').addEventListener('change', refreshTicket);
+$('strikeSel').addEventListener('change', refreshTicket);
+
+function doTrade(side){ // 'buy' | 'sell'
+  if (!DAY || DAY.done) return;
+  const cp = $('cpSel').value, K = +$('strikeSel').value;
+  let qty = Math.max(1, Math.min(200, Math.round(+$('qtyInp').value || 1)));
+  const q = optQuote(cp, K);
+  const px = side === 'buy' ? q.ask : q.bid;
+  const cost = px*100*qty + E.FEE*qty;
+  if (side === 'buy' && cost > DAY.cash){
+    coachSay(`Not enough cash: that costs ${fmt$(cost)} and you have ${fmt$(DAY.cash)}.`, 'warn');
+    return;
+  }
+  const key = cp + K;
+  const pos = DAY.positions.get(key) || { cp, K, qty: 0, avg: 0 };
+  const signedQty = side === 'buy' ? qty : -qty;
+  // cash
+  DAY.cash += (side === 'buy' ? -(px*100*qty) : px*100*qty) - E.FEE*qty;
+  // position merge
+  if (pos.qty === 0 || Math.sign(pos.qty) === Math.sign(signedQty)){
+    pos.avg = (pos.avg*Math.abs(pos.qty) + px*qty) / (Math.abs(pos.qty)+qty);
+    pos.qty += signedQty;
+  } else {
+    // closing (possibly flipping)
+    const closeQty = Math.min(Math.abs(pos.qty), qty);
+    DAY.realized += (px - pos.avg) * 100 * closeQty * Math.sign(pos.qty);
+    pos.qty += signedQty;
+    if (pos.qty !== 0 && Math.sign(pos.qty) === Math.sign(signedQty)) pos.avg = px;
+  }
+  if (pos.qty === 0) DAY.positions.delete(key); else DAY.positions.set(key, pos);
+  // log w/ context
+  const lv = lvAt(DAY.i), S = spot();
+  const gN = naiveNetNow();
+  const rec = {
+    min: DAY.i, side, cp, K, px, qty, S,
+    net: gN, flip: lv.flip, cw: lv.callWall, pw: lv.putWall,
+    opening: Math.sign(signedQty) === Math.sign(pos.qty || signedQty) && !(DAY.positions.get(key)===undefined && pos.qty===0),
+    premium: px*100*qty
+  };
+  rec.isOpen = !(pos.qty === 0);
+  DAY.trades.push(rec);
+  addBlotterRow(rec);
+  tradeCoach(rec);
+  markEquity(); refreshAll();
+}
+$('buyBtn').addEventListener('click', () => doTrade('buy'));
+$('sellBtn').addEventListener('click', () => doTrade('sell'));
+
+function closePosition(key){
+  const pos = DAY.positions.get(key);
+  if (!pos) return;
+  $('cpSel').value = pos.cp;
+  populateStrikes();
+  if (![...$('strikeSel').options].some(o => +o.value === pos.K)){
+    const o = document.createElement('option'); o.value = pos.K; o.textContent = pos.K; $('strikeSel').appendChild(o);
+  }
+  $('strikeSel').value = pos.K;
+  $('qtyInp').value = Math.abs(pos.qty);
+  doTrade(pos.qty > 0 ? 'sell' : 'buy');
+}
+
+function positionsMark(){
+  let val = 0, rows = [];
+  for (const [key, p] of DAY.positions){
+    const q = optQuote(p.cp, p.K);
+    const mark = q.mid;
+    const pnl = (mark - p.avg)*100*p.qty;
+    val += mark*100*p.qty;
+    rows.push({ key, ...p, mark, pnl, delta: q.delta*p.qty*100, thetaHr: q.thetaHr*p.qty*100 });
+  }
+  return { val, rows };
+}
+function markEquity(){
+  const m = positionsMark();
+  DAY.equity[DAY.i] = DAY.cash + m.val;
+}
+function dayPnl(){ return (DAY.equity[DAY.i] ?? START_CASH) - START_CASH; }
+
+function naiveNetNow(){
+  // displayed net GEX: interpolate bucket levels' net (naive convention)
+  return lvAt(DAY.i).net !== undefined ? lvAt(DAY.i).net : 0;
+}
+
+/* ---------- end of day ---------- */
+function endDay(){
+  if (DAY.done) return;
+  DAY.done = true;
+  setSpeed(0);
+  const Sc = DAY.S[389];
+  let settleNote = [];
+  for (const [key, p] of DAY.positions){
+    const intr = Math.max(0, p.cp === 'C' ? Sc - p.K : p.K - Sc);
+    if (intr === 0 && p.qty > 0) DAY._heldOTM = true;
+    DAY.realized += (intr - p.avg)*100*p.qty;
+    DAY.cash += intr*100*p.qty;
+    settleNote.push(`${p.qty>0?'+':''}${p.qty} ${p.K}${p.cp} settled at ${fmt2(intr)}`);
+  }
+  DAY.positions.clear();
+  DAY.equity[389] = DAY.cash;
+  refreshAll();
+  showReport(settleNote);
+}
+
+/* ============================================================
+   COACH
+============================================================ */
+function coachSay(html, kind){
+  if (!$('coachChk').checked && kind !== 'force') return;
+  const div = document.createElement('div');
+  div.className = 'coachMsg' + (kind === 'warn' ? ' warn' : kind === 'good' ? ' good' : '');
+  div.innerHTML = `<div class="t">${DAY ? minToClock(DAY.i) : ''}</div>${html}`;
+  $('coachFeed').prepend(div);
+  while ($('coachFeed').children.length > 40) $('coachFeed').lastChild.remove();
+}
+function regimeWord(net){ return net > 0 ? 'positive' : 'negative'; }
+function openingBriefing(){
+  const lv = lvAt(0), S = DAY.S[0];
+  const pos = lv.net > 0;
+  return `<b>Morning briefing.</b> SPX opens at <b>${fmtPx(S)}</b>. The dealer map reads <b>${fmtBn(lv.net)} per 1%</b> — ${pos ? 'positive' : 'negative'} gamma. ` +
+    `Gamma flip ${lv.flip ? '<b>'+fmtPx(lv.flip)+'</b>' : (lv.net<0?'<b>far overhead</b> (deeply negative territory)':'<b>far below</b>')}, call wall <b>${lv.callWall}</b>, put wall <b>${lv.putWall}</b>. ` +
+    (pos ? `Playbook: expect mean reversion between the walls; fading edges beats chasing; theta drains longs all day.`
+         : `Playbook: expect trend and expanded ranges; go with moves, use the flip (${lv.flip?fmtPx(lv.flip):'—'}) as your regime line; size down — vol is elevated.`);
+}
+function coachOnce(flag, fn){
+  if (DAY.coachFlags[flag]) return;
+  DAY.coachFlags[flag] = true; fn();
+}
+function coachEvery(flag, cooldown, fn){
+  const last = DAY.coachFlags[flag] ?? -1e9;
+  if (DAY.i - last < cooldown) return;
+  DAY.coachFlags[flag] = DAY.i; fn();
+}
+function coachTick(){
+  const i = DAY.i, S = spot(), lv = lvAt(i), prevLv = lvAt(Math.max(0,i-1));
+  const net = lv.net, prevS = DAY.S[i-1];
+  // flip crossings
+  if (lv.flip && prevS && ((prevS > lv.flip && S <= lv.flip) || (prevS < lv.flip && S >= lv.flip))){
+    const below = S <= lv.flip;
+    coachEvery('flipX', 20, () => coachSay(
+      `<b>Gamma flip ${below?'lost':'reclaimed'} (${fmtPx(lv.flip)}).</b> ${below ?
+      'Below the flip dealers hedge <i>with</i> the market — moves get amplified. Breakdowns extend more often than they V-bottom immediately. Fading here is fighting the flow.' :
+      'Back above the flip dealers stabilize the tape again. The downside accelerant is off; ranges should compress.'}`, below ? 'warn' : 'good'));
+  }
+  // near call wall in +gamma
+  if (net > 0 && lv.callWall && S > lv.callWall*0.9975 && S < lv.callWall*1.002){
+    coachEvery('nearCW', 45, () => coachSay(
+      `<b>Approaching the call wall (${lv.callWall}).</b> In positive gamma this is where dealer selling is heaviest — rallies stall here far more often than they break. Classic mistake: buying calls into this level. Higher-EV: take profits on longs / consider the fade.`, 'info'));
+  }
+  if (net > 0 && lv.putWall && S < lv.putWall*1.0025 && S > lv.putWall*0.998){
+    coachEvery('nearPW', 45, () => coachSay(
+      `<b>Testing the put wall (${lv.putWall}).</b> Heaviest put gamma below — dealers buy dips here. In positive gamma this is the highest-probability support of the day.`, 'info'));
+  }
+  // negative gamma momentum
+  if (net < 0 && i > 30){
+    const mv = (S - DAY.S[i-30])/S*100;
+    if (Math.abs(mv) > 0.7) coachEvery('negMom', 60, () => coachSay(
+      `<b>Momentum in negative gamma.</b> SPX moved ${mv.toFixed(1)}% in 30 min. Dealer hedging is pushing the same direction — "overbought/oversold" matters less here. Trend trades > fade trades until the flip is reclaimed.`, 'info'));
+  }
+  // event
+  if (DAY.sc.eventMin !== null && i === DAY.sc.eventMin - 20){
+    coachOnce('evtSoon', () => coachSay(
+      `<b>Event in 20 minutes.</b> IV is holding option prices up; after the release it collapses (vol crush). Holding long premium through an event, you need the move to beat the crush + theta. Many pros cut size or go flat here.`, 'warn'));
+  }
+  if (DAY.sc.eventMin !== null && i === DAY.sc.eventMin + 5){
+    coachOnce('evtPost', () => coachSay(
+      `<b>Post-event.</b> Watch two things: did we cross the flip, and what did IV do? A crossed flip = new regime for the rest of the day. Crushed IV = long premium bleeds fast even if direction is right.`, 'info'));
+  }
+  // last hour theta
+  if (i === 330){
+    const m = positionsMark();
+    const longPrem = m.rows.some(r => r.qty > 0);
+    if (longPrem) coachOnce('lastHr', () => coachSay(
+      `<b>Final hour.</b> 0DTE theta decay goes nonlinear now — ATM options lose most of their remaining time value in the next 60 minutes. ${net>0?'In positive gamma (pin conditions) this is when long premium dies fastest.':'In negative gamma a trend can still pay, but the clock is brutal — be right quickly.'}`, 'warn'));
+  }
+  if (i === 360){
+    const m = positionsMark();
+    const otm = m.rows.filter(r => r.qty > 0 && (r.cp==='C' ? spot() < r.K : spot() > r.K));
+    if (otm.length) coachOnce('last30', () => coachSay(
+      `<b>30 minutes left, you hold OTM longs (${otm.map(r=>r.K+r.cp).join(', ')}).</b> These need SPX to move ${otm.map(r=>Math.abs(r.K-spot()).toFixed(0)).join('/')} points or they expire worthless. Hope is not a hedge — salvage value now is usually the right trade.`, 'warn'));
+  }
+  // pin forming
+  if (net > 0 && i > 300 && lv.magnet && Math.abs(S - lv.magnet)/S < 0.0018){
+    coachEvery('pin', 60, () => coachSay(
+      `<b>Pin forming at ${lv.magnet}.</b> Max-gamma strike + positive gamma + late day = price gets sticky. This is where premium <i>sellers</i> get paid; buyers of either side get ground out.`, 'info'));
+  }
+  // squeeze scenario tell
+  if (DAY.sc.type === 'squeeze0dte' && i === 40){
+    coachOnce('sqTell', () => coachSay(
+      `<b>Flow note (tape-reading):</b> unusually aggressive 0DTE <i>call buying</i> at and above the money. Careful — the "call wall" on the map assumes dealers are LONG those calls. If today's flow means dealers are SHORT them, that wall is not resistance… it's fuel. Watch how price behaves at the wall before trusting the fade.`, 'warn'));
+  }
+}
+function tradeCoach(rec){
+  const net = rec.net, S = rec.S;
+  const longDelta = (rec.side === 'buy') === (rec.cp === 'C');
+  if (!rec.isOpen) { // fully closed something
+    return;
+  }
+  if (net > 0 && rec.cw && rec.cp === 'C' && rec.side === 'buy' && S > rec.cw - (rec.cw*0.0035) && S < rec.cw){
+    coachSay(`You bought calls <b>${(rec.cw-S).toFixed(0)} pts under the call wall in positive gamma</b> — that's paying premium right where the dealer sell-wall lives. If this works, it's despite the flow, not because of it.`, 'warn');
+  } else if (net > 0 && !longDelta && rec.flip && Math.abs(S - (rec.cw||0)) < S*0.003){
+    coachSay(`Fading strength at the wall in positive gamma — <b>structurally aligned</b> with dealer flows. Manage the risk: walls break ~1 in 4 times, and when they do it's fast.`, 'good');
+  } else if (net < 0 && longDelta === (S >= (rec.flip || S))){
+    coachSay(`Trading <b>with</b> the regime. In negative gamma, momentum is your friend and the flip (${rec.flip?fmtPx(rec.flip):'—'}) is your line in the sand.`, 'good');
+  } else if (net < 0 && rec.side === 'buy'){
+    const iv = optQuote(rec.cp, rec.K).iv;
+    if (iv > 0.3) coachSay(`Heads-up: you're paying <b>${(iv*100).toFixed(0)}% IV</b>. In panicky tape the option can lose value even if you're right on direction, once vol comes in. Debit spreads cut that risk.`, 'info');
+  }
+  if (rec.premium > START_CASH*0.2){
+    coachSay(`<b>Size check:</b> that's ${(rec.premium/START_CASH*100).toFixed(0)}% of the account in premium on one 0DTE position. A full loss is a normal outcome for 0DTE options — most pros risk 1–5% per idea.`, 'warn');
+  }
+  if (rec.side === 'sell' && (DAY.positions.get(rec.cp+rec.K)?.qty ?? 0) < 0){
+    coachSay(`You're <b>short naked ${rec.cp === 'C' ? 'calls' : 'puts'}</b>. You keep the premium if it expires OTM — but the loss is uncapped and gamma grows violently into the close. Real accounts die on exactly this trade. (In the gym, feel free to learn it the cheap way.)`, 'warn');
+  }
+}
+
+/* ============================================================
+   GRADING
+============================================================ */
+function grade(){
+  const opens = DAY.trades.filter(t => t.isOpen);
+  const g = { align: 12.5, loc: 12.5, risk: 20, exit: 15, notes: [] };
+  if (!opens.length) return { total: null };
+  let alignPts = 0, locPts = 0, n = 0;
+  for (const t of opens){
+    n++;
+    const longDelta = (t.side === 'buy') === (t.cp === 'C');
+    const neg = t.net < 0;
+    const nearCW = t.cw && Math.abs(t.S - t.cw) < t.S*0.003;
+    const nearPW = t.pw && Math.abs(t.S - t.pw) < t.S*0.003;
+    // alignment
+    if (neg){
+      const withTrend = DAY.S[Math.max(0,t.min-20)] !== undefined &&
+        (longDelta === (t.S >= DAY.S[Math.max(0,t.min-20)]));
+      alignPts += withTrend ? 1 : -0.6;
+      if (!withTrend) g.notes.push(`${minToClock(t.min)} — countertrend ${t.side} ${t.K}${t.cp} in negative gamma: fighting dealer flows.`);
+    } else {
+      const fading = (nearCW && !longDelta) || (nearPW && longDelta);
+      const chasing = (nearCW && longDelta && t.cp === 'C' && t.side==='buy') || (nearPW && !longDelta && t.cp === 'P' && t.side==='buy');
+      alignPts += fading ? 1 : chasing ? -1 : 0.3;
+      if (chasing) g.notes.push(`${minToClock(t.min)} — bought ${t.K}${t.cp} into the ${nearCW?'call wall':'put wall'} in positive gamma: paying premium at the worst location.`);
+      if (fading) g.notes.push(`${minToClock(t.min)} — faded at the ${nearCW?'call wall':'put wall'}: textbook positive-gamma trade.`);
+    }
+    // location quality: distance from a wall/flip reference
+    locPts += (nearCW || nearPW || (t.flip && Math.abs(t.S-t.flip) < t.S*0.003)) ? 1 : 0.2;
+    // risk
+    if (t.premium > START_CASH*0.2){ g.risk -= 6; g.notes.push(`${minToClock(t.min)} — position was ${(t.premium/START_CASH*100).toFixed(0)}% of the account.`); }
+    else if (t.premium > START_CASH*0.08) g.risk -= 2;
+  }
+  g.align = Math.max(0, Math.min(25, 12.5 + 12.5*alignPts/n));
+  g.loc = Math.max(0, Math.min(25, 25*locPts/n));
+  g.risk = Math.max(0, Math.min(25, g.risk + 5));
+  // exits
+  const settledWorthless = DAY.trades.length && DAY.equity[389] !== undefined;
+  let exit = 15;
+  const closes = DAY.trades.filter(t => !t.isOpen);
+  if (closes.length) exit += 5;
+  // held OTM to the end?
+  exit -= Math.min(10, DAY._heldOTM ? 10 : 0);
+  g.exit = Math.max(0, Math.min(25, exit));
+  const total = Math.round(g.align + g.loc + g.risk + g.exit);
+  return { ...g, total };
+}
+function letter(t){ return t>=85?'A':t>=70?'B':t>=55?'C':t>=40?'D':'F'; }
+
+function showReport(settleNote){
+  const pnl = DAY.cash - START_CASH;
+  const g = grade();
+  const lv = lvAt(389);
+  let html = `<h2 style="margin-top:0">Session complete — ${DAY.title}</h2>`;
+  html += `<div class="statrow">
+    <div class="stat"><div class="lab">Day P&L</div><div class="val num ${pnl>=0?'up':'dn'}">${fmt$(pnl)}</div></div>
+    <div class="stat"><div class="lab">Trades</div><div class="val num">${DAY.trades.length}</div></div>
+    <div class="stat"><div class="lab">Close</div><div class="val num">${fmtPx(DAY.S[389])}</div></div>
+    <div class="stat"><div class="lab">Day range</div><div class="val num">${((Math.max(...DAY.S)-Math.min(...DAY.S))/DAY.S[0]*100).toFixed(2)}%</div></div>
+  </div>`;
+  if (settleNote && settleNote.length) html += `<p class="small mut">Settlement: ${settleNote.join(' · ')}</p>`;
+  if (g.total === null){
+    html += `<p class="ink2">No trades today. Watching a regime play out is legitimate practice — note what the map predicted vs. what happened, then run another day and take one high-quality setup.</p>`;
+  } else {
+    html += `<div style="display:flex;gap:22px;align-items:center;margin:14px 0">
+      <div class="gradeBig" style="color:${g.total>=70?'var(--green)':g.total>=55?'var(--yellow)':'var(--red)'}">${letter(g.total)}</div>
+      <table class="rubric" style="flex:1">
+        <tr><td>Regime alignment</td><td class="num">${g.align.toFixed(0)}/25</td></tr>
+        <tr><td>Entry location vs levels</td><td class="num">${g.loc.toFixed(0)}/25</td></tr>
+        <tr><td>Risk & sizing</td><td class="num">${g.risk.toFixed(0)}/25</td></tr>
+        <tr><td>Exit discipline</td><td class="num">${g.exit.toFixed(0)}/25</td></tr>
+      </table></div>`;
+    html += `<p class="small mut">Process grade, not P&L grade — a good process losing day beats a lucky gamble.</p>`;
+    if (g.notes.length) html += `<div class="callout"><b>Coach notes</b><br>${g.notes.slice(0,5).join('<br>')}</div>`;
+  }
+  if (DAY.isCase && DAY.caseObj) html += `<div class="callout" style="border-left-color:var(--violet)"><b>What actually happened — ${DAY.caseObj.date}</b><br>${DAY.caseObj.debrief}</div>`;
+  if (!DAY.isCase && DAY.sc.type === 'squeeze0dte') html += `<div class="callout warn"><b>The trap, revealed:</b> today's "call wall" was customer-bought 0DTE calls — dealers were <i>short</i> them. Every tick higher forced dealer buying, so the wall acted as an accelerant, not resistance. Lesson: GEX maps assume dealer positioning; when the tape disagrees with the map (walls not holding, momentum through levels), trust the tape.</div>`;
+  html += `<p style="display:flex;gap:10px"><button class="primary" onclick="closeModal();newDay()">New day</button>
+    <button onclick="closeModal();switchTab('cases')">Case studies</button>
+    <button onclick="closeModal()">Review the chart</button></p>`;
+  $('modalBox').innerHTML = html;
+  $('modal').classList.add('open');
+}
+function closeModal(){ $('modal').classList.remove('open'); }
+$('modal').addEventListener('click', e => { if (e.target.id === 'modal') closeModal(); });
+
+/* ============================================================
+   RENDERING
+============================================================ */
+function refreshAll(){
+  const S = spot(), lv = lvAt(DAY.i);
+  $('clock').textContent = minToClock(DAY.i);
+  const chg = S - DAY.S[0];
+  $('spotLbl').innerHTML = fmtPx(S) + ` <span class="small ${chg>=0?'up':'dn'}">${chg>=0?'+':''}${chg.toFixed(0)}</span>`;
+  const net = lv.net;
+  const badge = $('regimeBadge');
+  badge.textContent = (net>0?'+':'−') + ' GAMMA ' + fmtBn(net).replace('+','').replace('−','') + '/1%';
+  badge.className = 'badge ' + (Math.abs(net) < 5e8 ? 'zero' : net > 0 ? 'pos' : 'neg');
+  $('netGexLbl').textContent = fmtBn(net) + '/1%';
+  $('flipLbl').textContent = lv.flip ? fmtPx(lv.flip) : (lv.net < 0 ? 'far overhead ↑' : 'far below ↓');
+  $('cwLbl').textContent = lv.callWall ?? '—';
+  $('pwLbl').textContent = lv.putWall ?? '—';
+  $('cashLbl').textContent = fmt$(DAY.cash);
+  const pnl = dayPnl();
+  const pl = $('pnlLbl'); pl.textContent = fmt$(pnl); pl.className = 'val num ' + (pnl >= 0 ? 'up' : 'dn');
+  refreshTicket();
+  renderPositions();
+  drawPrice();
+  drawGexCurve();
+}
+function renderPositions(){
+  const tb = $('posTable').querySelector('tbody');
+  const m = positionsMark();
+  tb.innerHTML = '';
+  $('noPos').style.display = m.rows.length ? 'none' : '';
+  for (const r of m.rows){
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${r.K}${r.cp}</td><td class="num">${r.qty}</td><td class="num">${fmt2(r.avg)}</td>
+      <td class="num">${fmt2(r.mark)}</td><td class="num">${r.delta.toFixed(0)}</td><td class="num dn">${r.thetaHr.toFixed(0)}</td>
+      <td class="num ${r.pnl>=0?'up':'dn'}">${fmt$(r.pnl)}</td>
+      <td><button class="small" style="padding:2px 8px" onclick="closePosition('${r.key}')">✕</button></td>`;
+    tb.appendChild(tr);
+  }
+}
+function addBlotterRow(rec){
+  $('noTrades').style.display = 'none';
+  const tb = $('blotter').querySelector('tbody');
+  const tr = document.createElement('tr');
+  const ctx = `${rec.net>0?'+γ':'−γ'}${rec.cw ? ', '+(rec.cw-rec.S).toFixed(0)+' to CW' : ''}${rec.pw ? ', '+(rec.S-rec.pw).toFixed(0)+' to PW' : ''}`;
+  tr.innerHTML = `<td>${minToClock(rec.min)}</td><td class="${rec.side==='buy'?'up':'dn'}">${rec.side.toUpperCase()}</td>
+    <td>${rec.K}${rec.cp}</td><td class="num">${rec.qty}</td><td class="num">${fmt2(rec.px)}</td><td class="mut small">${ctx}</td>`;
+  tb.prepend(tr);
+}
+
+/* ---------- canvas helpers ---------- */
+function setupCanvas(cv, cssH){
+  const dpr = window.devicePixelRatio || 1;
+  const w = cv.clientWidth || cv.parentElement.clientWidth;
+  cv.width = w*dpr; cv.height = cssH*dpr;
+  cv.style.height = cssH+'px';
+  const ctx = cv.getContext('2d');
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  return { ctx, W: w, H: cssH };
+}
+const COL = { blue:'#3987e5', green:'#0ca30c', red:'#e66767', yellow:'#c98500', violet:'#9085e9',
+  grid:'#2c2c2a', axis:'#383835', ink:'#ffffff', ink2:'#c3c2b7', muted:'#898781', surface:'#1a1a19' };
+
+let yState = { lo: null, hi: null };
+function drawPrice(){
+  const cv = $('priceCanvas');
+  const { ctx, W, H } = setupCanvas(cv, 430);
+  ctx.fillStyle = COL.surface; ctx.fillRect(0,0,W,H);
+  const i = DAY.i, lv = lvAt(i);
+  const padB = 24, padT = 10;
+  const stripW = 96, labW = 56;
+  const plotW = W - stripW - labW - 8;
+  // y range: visible path + nearby levels, eased
+  let lo = Infinity, hi = -Infinity;
+  for (let j=0;j<=i;j++){ if (DAY.S[j]<lo) lo=DAY.S[j]; if (DAY.S[j]>hi) hi=DAY.S[j]; }
+  const S0 = DAY.S[0];
+  for (const L of [lv.callWall, lv.putWall, lv.flip, lv.magnet]){
+    if (L && Math.abs(L - DAY.S[i]) < S0*0.02){ lo = Math.min(lo, L); hi = Math.max(hi, L); }
+  }
+  const pad = Math.max((hi-lo)*0.12, S0*0.0012);
+  lo -= pad; hi += pad;
+  if (yState.lo === null){ yState.lo = lo; yState.hi = hi; }
+  yState.lo += (lo - yState.lo)*0.25; yState.hi += (hi - yState.hi)*0.25;
+  yState.lo = Math.min(yState.lo, lo); yState.hi = Math.max(yState.hi, hi);
+  const ylo = yState.lo, yhi = yState.hi;
+  const X = m => m/389*plotW;
+  const Y = p => padT + (yhi - p)/(yhi - ylo)*(H - padT - padB);
+  // gridlines: horizontal at nice steps
+  const step = niceStep((yhi-ylo)/6);
+  ctx.strokeStyle = COL.grid; ctx.lineWidth = 1;
+  ctx.fillStyle = COL.muted; ctx.font = '11px system-ui'; ctx.textAlign = 'left';
+  for (let p = Math.ceil(ylo/step)*step; p < yhi; p += step){
+    ctx.beginPath(); ctx.moveTo(0, Y(p)); ctx.lineTo(plotW, Y(p)); ctx.stroke();
+    ctx.fillText(fmtPx(p), plotW + 6, Y(p)+4);
+  }
+  // time axis
+  ctx.textAlign = 'center';
+  for (let hr=1; hr<=6; hr++){
+    const m = hr*60 - 30;
+    if (m > 388) break;
+    ctx.strokeStyle = COL.grid;
+    ctx.beginPath(); ctx.moveTo(X(m), padT); ctx.lineTo(X(m), H-padB); ctx.stroke();
+    const hh = 9+hr > 12 ? 9+hr-12 : 9+hr;
+    ctx.fillText(hh + (9+hr>=12?'pm':'am'), X(m), H-8);
+  }
+  // levels
+  function levelLine(p, color, dash, label){
+    if (!p || p < ylo || p > yhi) return;
+    ctx.strokeStyle = color; ctx.lineWidth = 1.6;
+    ctx.setLineDash(dash);
+    ctx.beginPath(); ctx.moveTo(0, Y(p)); ctx.lineTo(plotW, Y(p)); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = color; ctx.font = 'bold 10px system-ui'; ctx.textAlign = 'left';
+    ctx.fillText(label, plotW + 6, Y(p) - 5);
+    ctx.font = '11px system-ui'; ctx.fillStyle = COL.muted;
+  }
+  levelLine(lv.callWall, COL.green, [], 'CW ' + lv.callWall);
+  levelLine(lv.putWall, COL.red, [], 'PW ' + lv.putWall);
+  levelLine(lv.flip, COL.yellow, [7,5], 'FLIP ' + (lv.flip?fmtPx(lv.flip):''));
+  if (lv.magnet !== lv.callWall && lv.magnet !== lv.putWall) levelLine(lv.magnet, COL.violet, [2,4], 'MAG ' + lv.magnet);
+  // price path
+  ctx.strokeStyle = COL.blue; ctx.lineWidth = 2; ctx.beginPath();
+  for (let j=0;j<=i;j++){ const x = X(j), y = Y(DAY.S[j]); j===0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y); }
+  ctx.stroke();
+  // current price dot + open ref
+  ctx.fillStyle = COL.blue; ctx.beginPath(); ctx.arc(X(i), Y(DAY.S[i]), 3.5, 0, 7); ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,.25)'; ctx.setLineDash([2,5]);
+  ctx.beginPath(); ctx.moveTo(0, Y(S0)); ctx.lineTo(plotW, Y(S0)); ctx.stroke(); ctx.setLineDash([]);
+  // trade markers
+  for (const t of DAY.trades){
+    const x = X(t.min), y = Y(t.S);
+    ctx.fillStyle = t.side === 'buy' ? COL.green : COL.red;
+    ctx.beginPath();
+    if (t.side === 'buy'){ ctx.moveTo(x, y+9); ctx.lineTo(x-5, y+17); ctx.lineTo(x+5, y+17); }
+    else { ctx.moveTo(x, y-9); ctx.lineTo(x-5, y-17); ctx.lineTo(x+5, y-17); }
+    ctx.closePath(); ctx.fill();
+    // ring for contrast
+    ctx.strokeStyle = COL.surface; ctx.lineWidth = 1; ctx.stroke();
+  }
+  // ---- GEX strip (right) ----
+  const sx = W - stripW;
+  ctx.fillStyle = '#161615'; ctx.fillRect(sx, 0, stripW, H-padB+2);
+  const T = currentT();
+  DAY.sc.chain.ivNow = DAY.iv[i];
+  const prof = E.gexProfile(DAY.sc.chain, DAY.S[i], T, false).filter(r => r.k > ylo && r.k < yhi);
+  let maxG = 0;
+  for (const r of prof) maxG = Math.max(maxG, r.cGex, -r.pGex);
+  const cx = sx + stripW*0.5;
+  ctx.strokeStyle = COL.axis; ctx.beginPath(); ctx.moveTo(cx, padT); ctx.lineTo(cx, H-padB); ctx.stroke();
+  const rowH = Math.max(2, Math.min(8, (H-padT-padB)/Math.max(1,prof.length) - 2));
+  for (const r of prof){
+    const y = Y(r.k);
+    const cl = r.cGex/maxG * (stripW*0.46);
+    const pl = -r.pGex/maxG * (stripW*0.46);
+    ctx.fillStyle = COL.green;
+    if (cl > 0.5) ctx.fillRect(cx+1, y-rowH/2, cl, rowH);
+    ctx.fillStyle = COL.red;
+    if (pl > 0.5) ctx.fillRect(cx-1-pl, y-rowH/2, pl, rowH);
+  }
+  ctx.fillStyle = COL.muted; ctx.font = '9px system-ui'; ctx.textAlign = 'center';
+  ctx.fillText('puts | calls', cx, H - padB + 14);
+  // spot marker on strip
+  ctx.strokeStyle = COL.blue; ctx.setLineDash([3,3]);
+  ctx.beginPath(); ctx.moveTo(sx, Y(DAY.S[i])); ctx.lineTo(W, Y(DAY.S[i])); ctx.stroke(); ctx.setLineDash([]);
+  // store transforms for hover
+  cv._xform = { X, Y, plotW, ylo, yhi, i };
+}
+function niceStep(raw){
+  const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  for (const m of [1,2,2.5,5,10]) if (raw <= m*mag) return m*mag;
+  return 10*mag;
+}
+/* crosshair */
+$('priceCanvas').addEventListener('mousemove', e => {
+  if (!DAY || !$('priceCanvas')._xform) return;
+  const cv = $('priceCanvas'), r = cv.getBoundingClientRect();
+  const { X, plotW, i } = cv._xform;
+  const mx = e.clientX - r.left;
+  if (mx > plotW){ $('chartTip').style.display = 'none'; return; }
+  const m = Math.max(0, Math.min(i, Math.round(mx/plotW*389)));
+  const lv = lvAt(m);
+  const tip = $('chartTip');
+  tip.style.display = 'block';
+  tip.style.left = Math.min(mx + 14, r.width - 190) + 'px';
+  tip.style.top = (e.clientY - r.top + 14) + 'px';
+  tip.innerHTML = `<b>${minToClock(m)}</b><br>SPX <b>${fmt2(DAY.S[m])}</b><br>` +
+    `net GEX (map) <b class="${lv.net>0?'up':'dn'}">${fmtBn(lv.net)}</b><br>` +
+    `<span class="mut">flip ${lv.flip?fmtPx(lv.flip):'—'} · CW ${lv.callWall} · PW ${lv.putWall}</span>`;
+});
+$('priceCanvas').addEventListener('mouseleave', () => $('chartTip').style.display = 'none');
+
+function drawGexCurve(){
+  const cv = $('gexCurveCanvas');
+  const { ctx, W, H } = setupCanvas(cv, 110);
+  ctx.fillStyle = COL.surface; ctx.fillRect(0,0,W,H);
+  const lv = lvAt(DAY.i);
+  const c = lv.curve;
+  if (!c) return;
+  const xlo = c.xs[0], xhi = c.xs[c.xs.length-1];
+  let ymax = 0; for (const y of c.ys) ymax = Math.max(ymax, Math.abs(y));
+  if (!ymax) return;
+  const X = s => (s-xlo)/(xhi-xlo)*(W-8)+4;
+  const Y = v => H/2 - v/ymax*(H/2-10);
+  ctx.strokeStyle = COL.axis; ctx.beginPath(); ctx.moveTo(0,H/2); ctx.lineTo(W,H/2); ctx.stroke();
+  // shade positive green / negative red under curve
+  ctx.beginPath();
+  ctx.moveTo(X(c.xs[0]), Y(c.ys[0]));
+  for (let j=1;j<c.xs.length;j++) ctx.lineTo(X(c.xs[j]), Y(c.ys[j]));
+  ctx.strokeStyle = COL.ink2; ctx.lineWidth = 1.8; ctx.stroke();
+  if (lv.flip){
+    ctx.strokeStyle = COL.yellow; ctx.setLineDash([5,4]);
+    ctx.beginPath(); ctx.moveTo(X(lv.flip), 6); ctx.lineTo(X(lv.flip), H-6); ctx.stroke(); ctx.setLineDash([]);
+  }
+  const s = spot();
+  ctx.fillStyle = COL.blue;
+  ctx.beginPath(); ctx.arc(X(s), Y(E.gexAtSpot(DAY.sc.chain, s, currentT(), false)), 4, 0, 7); ctx.fill();
+  ctx.fillStyle = COL.muted; ctx.font = '10px system-ui';
+  ctx.textAlign = 'left'; ctx.fillText(fmtPx(xlo), 4, H-2);
+  ctx.textAlign = 'right'; ctx.fillText(fmtPx(xhi), W-4, H-2);
+}
+
+window.addEventListener('resize', () => { if (DAY) { drawPrice(); drawGexCurve(); } });
+
+/* ============================================================
+   SPX Gamma Gym — real-day case studies + Live GEX tab
+============================================================ */
+'use strict';
+
+/* ---------- CASE LIBRARY ----------
+   Real dates & stories; OHLC anchored to the actual day (± a few points);
+   intraday minute path is a seeded reconstruction; GEX levels rebuilt
+   from public post-mortems (approximate by nature).
+------------------------------------ */
+const CASES = [
+  {
+    id: 'aug5_2024', date: 'Mon Aug 5, 2024', title: 'The Yen-Carry Crash',
+    tag: 'deep negative gamma', tagColor: 'rgba(230,103,103,.15);color:#ef8a8a',
+    blurb: 'VIX printed 65 pre-market after the yen carry trade unwound. SPX gapped down 2.5% into the deepest negative-gamma pocket since 2022.',
+    spot0: 5151, prevClose: 5346.6, hi: 5208, lo: 5119, close: 5186.3,
+    ivOpen: 0.48, ivClose: 0.38, seed: 80524,
+    anchors: [[0,5151],[18,5124],[35,5119.3],[70,5160],[130,5172],[200,5148],[250,5165],[310,5196],[355,5178],[389,5186.3]],
+    ivPts: [[0,0.52],[40,0.55],[120,0.46],[389,0.38]],
+    chainRecipe: { cw: [5250, 3200], pw: [5050, 6500], flipT: 5320, extraPuts: 1.45, ivBase: 0.5, skew: 1.6, curve: 1.2 },
+    brief: `<h4>Pre-open briefing — Monday, August 5, 2024</h4>
+      <p>Friday's weak jobs report met a Bank of Japan rate hike, and the yen carry trade — years of borrowing cheap yen to buy everything else — unwound overnight. Nikkei −12%, its worst day since 1987. ES futures are down hard; <b>VIX printed 65 in the pre-market</b>, its highest level since COVID. SPX will open near <b>5151</b>, down ~2.5%, after closing Friday at 5346.</p>
+      <p>The gamma picture: dealers have been <b>deeply short gamma for days</b> — the flip is estimated way overhead near <b>5320</b>, put gamma is stacked all the way down through <b>5100–5000</b>, and every tick lower forces dealers to sell more. Realized vol is exploding. 0DTE premiums are 4–5× a normal Monday.</p>
+      <p><b>Questions to trade:</b> Do you chase puts on a −2.5% gap when IV is at 50+? Does the morning flush hold above the put wall? What happens to option prices when the panic pauses — even for an hour?</p>`,
+    coachOpen: `Note before the bell: with IV near 50, an ATM 0DTE straddle prices a ±2% range <i>on top of</i> the gap. Direction isn't enough today — you're also trading the vol.`,
+    debrief: `SPX flushed to <b>5119 in the first 40 minutes</b>, then never made a lower low — it chopped violently upward all afternoon and closed at <b>5186 (−3.0%)</b>, well off the lows. The gamma lesson cut both ways: negative gamma delivered the violence, but the biggest 0DTE losers were traders who <b>bought puts after the open</b> — paying 50+ IV for a move that had already happened. As the market stabilized, vol crush destroyed put premium even while SPX stayed deeply red. VIX finished around 38 after touching 65. The put wall zone (5000–5100) was never seriously tested during regular hours. Three days later SPX had recovered the entire drop — a signature negative-gamma overshoot.`
+  },
+  {
+    id: 'feb5_2018', date: 'Mon Feb 5, 2018', title: 'Volmageddon',
+    tag: 'gamma feedback loop', tagColor: 'rgba(230,103,103,.15);color:#ef8a8a',
+    blurb: 'The day short-vol products blew up. An orderly dip became a cascade as vol-linked hedging demanded selling into a falling market.',
+    spot0: 2741, prevClose: 2762.1, hi: 2763.4, lo: 2638.2, close: 2648.9,
+    ivOpen: 0.19, ivClose: 0.42, seed: 20518,
+    anchors: [[0,2741],[25,2757],[60,2748],[130,2726],[200,2712],[270,2695],[330,2668],[352,2648],[362,2640],[375,2655],[389,2648.9]],
+    ivPts: [[0,0.19],[200,0.24],[330,0.33],[389,0.42]],
+    chainRecipe: { cw: [2800, 2200], pw: [2650, 5200], flipT: 2752, extraPuts: 1.3, ivBase: 0.2, skew: 1.5, curve: 1.1 },
+    brief: `<h4>Pre-open briefing — Monday, February 5, 2018</h4>
+      <p>Friday broke a historic calm: SPX fell 2.1% on a hot wage print, the worst day in over a year, and VIX jumped to 17. For 15 months markets have only known grind-up — an entire ecosystem of <b>short-volatility products</b> (XIV, SVXY, vol-target funds) has grown fat selling every vol spike.</p>
+      <p>Gamma picture: Friday's fall dropped SPX below the estimated flip (~<b>2752</b>). Dealers are short gamma for the first time in months, and — the hidden risk — if VIX futures spike hard enough today, the short-vol complex must buy them back <i>at any price</i>, forcing dealers to sell equities dynamically into weakness. Put wall rebuilt near <b>2650</b>.</p>
+      <p><b>Questions to trade:</b> Is Friday's dip a buy like the last 15 were? What does it mean that the market opens <i>below</i> the flip for the first time in a year?</p>`,
+    coachOpen: `Regime memory matters: everyone trading today learned "buy the dip" in a +gamma world. The map says that world ended Friday.`,
+    debrief: `The morning bounce to <b>2763</b> failed exactly in the flip zone — the last great dip-buy attempt. From ~1pm the selling became mechanical: vol-target funds de-risking, dealers shorting futures as puts went ITM, and in the last hour the XIV rebalance loop triggered a <b>−100+ point air pocket</b>, with SPX touching 2638 and the Dow briefly down 1,600. Close: <b>2648.9 (−4.1%)</b>, the worst day since 2011. After hours, XIV lost ~95% of its value and was terminated. The lesson is the purest ever taught: below the flip, hedging flows <i>are</i> the market — the selling wasn't people changing their minds, it was mandates executing. Fading mechanical flows with 0DTE-style short-dated longs was catching knives all afternoon.`
+  },
+  {
+    id: 'feb2_2023', date: 'Thu Feb 2, 2023', title: 'The 0DTE Call Squeeze',
+    tag: 'the map lied', tagColor: 'rgba(201,133,0,.15);color:#e0a63d',
+    blurb: 'Post-FOMC melt-up. The GEX map showed a call wall overhead — but 0DTE call buyers had flipped dealers short gamma above the money.',
+    spot0: 4158.7, prevClose: 4119.2, hi: 4195.4, lo: 4141.9, close: 4179.8,
+    ivOpen: 0.19, ivClose: 0.155, seed: 20223,
+    anchors: [[0,4158.7],[30,4148],[45,4142],[100,4160],[170,4176],[250,4194],[290,4185],[340,4170],[389,4179.8]],
+    ivPts: [[0,0.19],[250,0.16],[389,0.155]],
+    chainRecipe: { cw: [4150, 4000], cw2: [4200, 3000], pw: [4050, 3400], flipT: 4110, ivBase: 0.19, skew: 0.8, curve: 0.9,
+                   squeezeRange: [4150, 4230] },
+    brief: `<h4>Pre-open briefing — Thursday, February 2, 2023</h4>
+      <p>Powell said "disinflation" about a dozen times yesterday and SPX ripped 1% into the close, finishing at 4119 — above every major moving average. META is +20% pre-market on earnings. The January-2023 rally is in full melt-up psychology, and <b>0DTE options — barely a year old as a daily product — are now ~45% of SPX volume</b>.</p>
+      <p>Gamma picture (the naive map): positive gamma, flip down near <b>4110</b>, and a chunky <b>call wall at 4150</b> that SPX will open right on top of. Textbook read: rally stalls here, fade strength, sell premium.</p>
+      <p>But the tape disagrees: for two weeks, aggressive intraday 0DTE <b>call buying</b> has been steamrolling these "walls." If customers own those calls, dealers are <i>short</i> them — and above 4150 dealers have to buy every new high.</p>
+      <p><b>Questions to trade:</b> Trust the map or the tape? What confirms the squeeze — and what would tell you the wall is holding after all?</p>`,
+    coachOpen: `Today's exercise: the printed GEX map and actual dealer positioning disagree. Watch how price behaves at 4150 — acceptance above a "wall" is the tell that it isn't one.`,
+    debrief: `SPX dipped to 4142 early, reclaimed 4150 within the first hour, and then did exactly what a real call wall never allows: <b>accelerated through it</b>, ripping to <b>4195</b> by early afternoon — a 0DTE-fueled gamma squeeze, with dealers buying futures against the calls they were short at 4150/4160/4175 as each strike went in-the-money. It faded late (the squeezed calls were sold into the close, unwinding hedges) and settled at <b>4179.8 (+1.5%)</b>. This day became the canonical example in every 0DTE research note that followed: <b>open-interest GEX assumes yesterday's positioning; same-day flow can invert it</b>. The fix traders adopted: pair the OI map with an intraday flow read (SpotGamma's HIRO, CBOE order-flow data) before trusting a wall.`
+  },
+  {
+    id: 'dec15_2023', date: 'Fri Dec 15, 2023', title: 'Quad-Witch Pin',
+    tag: 'maximum positive gamma', tagColor: 'rgba(12,163,12,.15);color:#43c943',
+    blurb: 'One of the largest OPEX days ever, days after a dovish Powell pivot. A colossal gamma pin with ~$5tn of notional expiring.',
+    spot0: 4714, prevClose: 4719.6, hi: 4725, lo: 4694, close: 4719.2,
+    ivOpen: 0.105, ivClose: 0.08, seed: 121523,
+    anchors: [[0,4714],[35,4723],[80,4706],[120,4696],[180,4708],[240,4715],[300,4711],[345,4721],[389,4719.2]],
+    ivPts: [[0,0.105],[200,0.09],[389,0.08]],
+    chainRecipe: { cw: [4720, 9000], cw2: [4700, 6000], pw: [4650, 5200], flipT: 4640, extraAll: 2.2, ivBase: 0.105, skew: 0.7, curve: 0.7 },
+    brief: `<h4>Pre-open briefing — Friday, December 15, 2023</h4>
+      <p>Two days ago Powell pivoted dovish and SPX went vertical; yesterday it closed at 4719, a hair from all-time highs, up seven weeks straight. Today is <b>quadruple witching</b> — quarterly OPEX — with roughly <b>$5 trillion in notional options exposure expiring</b>, among the largest in history.</p>
+      <p>Gamma picture: <b>enormous positive gamma</b>, the fattest concentration at <b>4700–4720</b> where both calls and puts have massive open interest. Flip is far below near 4640. Every vendor's note this morning says the same word: <b>pin</b>. Realized vol has collapsed to single digits.</p>
+      <p><b>Questions to trade:</b> What's a 0DTE option worth on a day the market physically struggles to move? Is there any long-premium trade that makes sense — or is this a premium seller's holiday? What happens to the pin's grip <i>after</i> today's expiry clears?</p>`,
+    coachOpen: `Days like this are where 0DTE call/put buyers donate. If you practice one thing today, practice patience — or practice being the seller.`,
+    debrief: `SPX traded a <b>~31-point range</b> (roughly 0.65%) on colossal volume and closed at <b>4719.2 — within half a point of the prior close</b>, glued to the 4700–4720 gamma shelf. Both 0DTE straddle buyers and breakout traders paid the pin tax; premium sellers collected. The subtle second lesson arrived the following week: once the expiry cleared, that gamma disappeared — and SPX promptly had its sharpest one-day drop in months (the Dec 20 air pocket). Pins are real, and they are rented: <b>the same OI that pins price today stops pinning it tomorrow</b>.`
+  },
+  {
+    id: 'dec18_2024', date: 'Wed Dec 18, 2024', title: 'FOMC Trapdoor',
+    tag: 'regime flip mid-day', tagColor: 'rgba(144,133,233,.18);color:#b0a8f0',
+    blurb: 'A calm positive-gamma morning at the highs. Then the dots came out hawkish, the flip broke, and the afternoon was a different market.',
+    spot0: 6047, prevClose: 6050.6, hi: 6070, lo: 5868, close: 5872.2,
+    ivOpen: 0.14, ivClose: 0.27, seed: 121824,
+    anchors: [[0,6047],[55,6062],[120,6050],[200,6056],[268,6052],[274,6008],[295,5975],[330,5930],[365,5895],[389,5872.2]],
+    ivPts: [[0,0.145],[268,0.135],[276,0.24],[389,0.27]],
+    chainRecipe: { cw: [6100, 4200], pw: [5900, 4400], flipT: 5985, ivBase: 0.14, skew: 1.1, curve: 1.0 },
+    eventMin: 270,
+    brief: `<h4>Pre-open briefing — Wednesday, December 18, 2024</h4>
+      <p>FOMC day. SPX sits near record highs at 6050 after the post-election melt-up; a 25bp cut is fully priced and consensus expects a routine meeting. The market has been in a <b>comfortable positive-gamma regime for weeks</b> — every dip bought, realized vol crushed.</p>
+      <p>Gamma picture: net positive this morning, call wall <b>6100</b>, put wall <b>5900</b>, and the flip estimated near <b>5985</b> — about 60 points below spot. Feels far away. The risk: today's positioning is complacent-long, and the entire cushion between here and the flip can vanish on one hawkish sentence at <b>2:00 PM ET</b>.</p>
+      <p><b>Questions to trade:</b> How do you position into a binary event in +gamma — if at all? If the flip breaks on the news, do you have a plan ready <i>before</i> 2pm? What's the trade if the cut comes but the 2025 dot plot is hawkish?</p>`,
+    coachOpen: `Two markets exist today: the pre-2pm pin and the post-2pm reveal. Decide now what a break of 5985 would make you do — you won't have time to think it through live.`,
+    debrief: `The Fed cut 25bp as expected — but the dot plot showed <b>only two cuts in 2025</b>, and Powell pressed the hawkish note. SPX broke the flip zone (~5985) within half an hour of the statement and the character change was instant: no dip-buyers, widening ranges, dealer selling stacking onto every leg lower. SPX closed at <b>5872 (−2.95%)</b>, near the lows — one of the worst Fed-day closes in a decade — and VIX jumped ~74%, its second-largest one-day spike ever. Traders using the gamma map had a genuine edge: <b>the flip level was the tripwire</b>, known in advance. Above it, fading weakness had worked for weeks; below it, the same trade lost all afternoon. Positioning, not prediction.`
+  }
+];
+
+/* ---------- case chain builder ---------- */
+function buildCaseChain(c){
+  const rng = E.mulberry32(c.seed + 17);
+  const r = c.chainRecipe;
+  const chain = E.makeChain(c.spot0, rng, { ivBase: r.ivBase, skew: r.skew, curve: r.curve });
+  if (r.extraAll) for (const s of chain.strikes){ s.cOI = Math.round(s.cOI*r.extraAll); s.pOI = Math.round(s.pOI*r.extraAll); }
+  if (r.cw) E.addCluster(chain, r.cw[0], 'c', r.cw[1]);
+  if (r.cw2) E.addCluster(chain, r.cw2[0], 'c', r.cw2[1]);
+  if (r.pw) E.addCluster(chain, r.pw[0], 'p', r.pw[1]);
+  if (r.extraPuts){ for (const s of chain.strikes) s.pOI = Math.round(s.pOI*r.extraPuts); }
+  if (r.flipT) E.tuneFlip(chain, c.spot0, E.T0, r.flipT);
+  if (r.squeezeRange) for (const s of chain.strikes){
+    if (s.k >= r.squeezeRange[0] && s.k <= r.squeezeRange[1]) s.cSign = -1;
+  }
+  return chain;
+}
+function ivArrayFromPts(pts){
+  const arr = new Array(390);
+  for (let i=0;i<390;i++){
+    let a = pts[0], b = pts[pts.length-1];
+    for (let j=0;j<pts.length-1;j++) if (i >= pts[j][0] && i <= pts[j+1][0]){ a = pts[j]; b = pts[j+1]; break; }
+    const t = b[0] === a[0] ? 0 : (i - a[0])/(b[0] - a[0]);
+    arr[i] = a[1] + (b[1]-a[1])*Math.min(1, Math.max(0, t));
+  }
+  return arr;
+}
+function runCase(c){
+  const chain = buildCaseChain(c);
+  const dayVolPct = (Math.max(c.hi, c.spot0) - Math.min(c.lo, c.spot0))/c.spot0*100;
+  const S = E.bridgePath(c.anchors, Math.max(0.5, dayVolPct*0.55), c.seed, c.hi, c.lo);
+  const iv = ivArrayFromPts(c.ivPts);
+  const sc = {
+    type: 'case', name: c.title, chain, spot0: c.spot0,
+    ivOpen: iv[0], ivClose: iv[389], ivPath: iv,
+    eventMin: c.eventMin ?? null, eventBias: 0, rvMult: 1, hint: ''
+  };
+  startDay({ sc, S, iv, gTrue: null, title: c.title + ' — ' + c.date, isCase: true, caseObj: c });
+}
+
+/* ---------- case UI ---------- */
+function renderCaseGrid(){
+  const g = $('caseGrid');
+  if (g.dataset.done) return;
+  g.dataset.done = '1';
+  for (const c of CASES){
+    const div = document.createElement('div');
+    div.className = 'caseCard';
+    div.innerHTML = `<div class="date">${c.date}</div><h3>${c.title}</h3>
+      <span class="tag" style="background:${c.tagColor}">${c.tag}</span>
+      <p>${c.blurb}</p>`;
+    div.addEventListener('click', () => showCaseBrief(c));
+    g.appendChild(div);
+  }
+}
+function showCaseBrief(c){
+  $('caseGrid').style.display = 'none';
+  $('caseRun').style.display = '';
+  $('caseBrief').innerHTML = c.brief;
+  $('caseStart').onclick = () => { runCase(c); $('caseGrid').style.display = ''; $('caseRun').style.display = 'none'; };
+}
+$('caseBack').addEventListener('click', () => { $('caseGrid').style.display = ''; $('caseRun').style.display = 'none'; });
+
+/* ============================================================
+   LIVE GEX TAB
+============================================================ */
+let LIVE = null;
+$('fetchLiveBtn').addEventListener('click', async () => {
+  const st = $('liveStatus');
+  st.textContent = 'fetching…';
+  try {
+    const resp = await fetch('https://cdn.cboe.com/api/global/delayed_quotes/options/_SPX.json');
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const j = await resp.json();
+    st.textContent = 'got it ✓ (delayed ~15 min)';
+    renderLive(j);
+  } catch (err) {
+    st.textContent = 'Direct fetch blocked here (' + err.message + ') — use the paste method below.';
+  }
+});
+$('parseLiveBtn').addEventListener('click', () => {
+  try {
+    const j = JSON.parse($('livePaste').value);
+    $('liveStatus').textContent = 'parsed ✓';
+    renderLive(j);
+  } catch (err) {
+    $('liveStatus').textContent = 'Could not parse: ' + err.message;
+  }
+});
+$('liveExpSel').addEventListener('change', () => { if (LIVE) renderLive(LIVE); });
+
+function renderLive(json){
+  LIVE = json;
+  let out;
+  try {
+    out = E.parseCboe(json, $('liveExpSel').value === 'all' ? 'all' : '0dte', Date.now());
+  } catch (err) {
+    $('liveStatus').textContent = err.message; return;
+  }
+  $('liveOut').style.display = '';
+  $('lvSpot').textContent = out.spot ? fmt2(out.spot) : '—';
+  $('lvNet').textContent = fmtBn(out.net) + '/1%';
+  $('lvNet').className = 'val num ' + (out.net >= 0 ? 'up' : 'dn');
+  $('lvFlip').textContent = out.flip ? fmtPx(out.flip) : 'n/a';
+  $('lvCW').textContent = out.callWall ?? '—';
+  $('lvPW').textContent = out.putWall ?? '—';
+  $('lvRegime').innerHTML = out.net >= 0 ? '<span class="up">stabilizing</span>' : '<span class="dn">amplifying</span>';
+  drawLiveProfile(out);
+  renderLiveTable(out);
+  $('livePlaybook').innerHTML = livePlaybookText(out);
+}
+function livePlaybookText(o){
+  if (!o.spot) return 'No spot price in the data.';
+  const pos = o.net >= 0;
+  const dCW = o.callWall ? ((o.callWall - o.spot)/o.spot*100).toFixed(1) : null;
+  const dPW = o.putWall ? ((o.spot - o.putWall)/o.spot*100).toFixed(1) : null;
+  const dFlip = o.flip ? ((o.spot - o.flip)/o.spot*100).toFixed(1) : null;
+  let t = `<p>Dealers are net <b>${pos ? 'long' : 'short'} ~${fmtBn(Math.abs(o.net)).replace('+','').replace('−','')} of gamma per 1%</b> at spot ${fmt2(o.spot)} `;
+  t += `(${o.expiries.length > 1 ? o.expiries.length + ' expiries' : 'expiry ' + o.expiries[0]}). `;
+  t += pos
+    ? `Expect <b>mean-reversion-friendly</b> conditions while this holds: dealer hedging leans against moves, intraday ranges tend to compress, and fading extremes toward the high-gamma strikes is the structurally favored pattern.`
+    : `Expect <b>trend-friendly, higher-vol</b> conditions: dealer hedging pushes with moves, so momentum carries further than it "should," and mean-reversion trades fight the flow.`;
+  t += `</p><p>`;
+  if (o.callWall) t += `The call wall at <b>${o.callWall}</b> (${dCW}% above) is the day's natural rally-stall zone. `;
+  if (o.putWall) t += `The put wall at <b>${o.putWall}</b> (${dPW}% below) is the highest-gamma support. `;
+  if (o.flip) t += `The gamma flip near <b>${fmtPx(o.flip)}</b> (${Math.abs(dFlip)}% ${dFlip >= 0 ? 'below' : 'above'} spot) is the regime line — a ${dFlip >= 0 ? 'break below it would hand the tape to the amplifying regime' : 'reclaim above it would restore the stabilizing regime'}.`;
+  t += `</p><p class="small mut">Remember the caveats from the Learn tab: this is the naive OI snapshot — intraday 0DTE flow can override it (Feb 2, 2023 case), and it says nothing about direction, only about how the tape should <i>behave</i>.</p>`;
+  return t;
+}
+function renderLiveTable(o){
+  const tb = $('liveTable').querySelector('tbody');
+  tb.innerHTML = '';
+  const top = [...o.profile].sort((a,b) => (Math.abs(b.cGex)+Math.abs(b.pGex)) - (Math.abs(a.cGex)+Math.abs(a.pGex))).slice(0,12)
+    .sort((a,b) => b.k - a.k);
+  for (const r of top){
+    const tr = document.createElement('tr');
+    const net = r.cGex + r.pGex;
+    tr.innerHTML = `<td><b>${r.k}</b>${r.k === o.callWall ? ' <span class="up small">CW</span>' : ''}${r.k === o.putWall ? ' <span class="dn small">PW</span>' : ''}</td>
+      <td class="num">${r.cOI.toLocaleString()}</td><td class="num">${r.pOI.toLocaleString()}</td>
+      <td class="num up">${(r.cGex/1e6).toFixed(0)}</td><td class="num dn">${(r.pGex/1e6).toFixed(0)}</td>
+      <td class="num ${net>=0?'up':'dn'}">${(net/1e6).toFixed(0)}</td>`;
+    tb.appendChild(tr);
+  }
+}
+function drawLiveProfile(o){
+  const cv = $('liveGexCanvas');
+  const { ctx, W, H } = setupCanvas(cv, 460);
+  ctx.fillStyle = COL.surface; ctx.fillRect(0,0,W,H);
+  const prof = o.profile.filter(r => Math.abs(r.cGex) + Math.abs(r.pGex) > 0);
+  if (!prof.length) return;
+  const kLo = Math.min(...prof.map(r => r.k)), kHi = Math.max(...prof.map(r => r.k));
+  let maxG = 0; for (const r of prof) maxG = Math.max(maxG, r.cGex, -r.pGex);
+  const padL = 64, padR = 16, padT = 10, padB = 20;
+  const cx = padL + (W - padL - padR)/2;
+  const Y = k => padT + (kHi - k)/(kHi - kLo || 1)*(H - padT - padB);
+  const rowH = Math.max(2, Math.min(9, (H - padT - padB)/prof.length - 1.5));
+  ctx.strokeStyle = COL.axis; ctx.beginPath(); ctx.moveTo(cx, padT); ctx.lineTo(cx, H - padB); ctx.stroke();
+  cv._rows = [];
+  for (const r of prof){
+    const y = Y(r.k);
+    const cl = r.cGex/maxG*(W - padL - padR)/2*0.94;
+    const pl = -r.pGex/maxG*(W - padL - padR)/2*0.94;
+    if (cl > 0.4){ ctx.fillStyle = COL.green; ctx.fillRect(cx+1, y - rowH/2, cl, rowH); }
+    if (pl > 0.4){ ctx.fillStyle = COL.red; ctx.fillRect(cx-1-pl, y - rowH/2, pl, rowH); }
+    cv._rows.push({ y, r });
+  }
+  // strike labels for round numbers
+  ctx.fillStyle = COL.muted; ctx.font = '10px system-ui'; ctx.textAlign = 'right';
+  const lblStep = niceStep((kHi - kLo)/10);
+  for (let k = Math.ceil(kLo/lblStep)*lblStep; k <= kHi; k += lblStep) ctx.fillText(fmtPx(k), padL - 8, Y(k)+3);
+  // spot line
+  if (o.spot && o.spot > kLo && o.spot < kHi){
+    ctx.strokeStyle = COL.blue; ctx.lineWidth = 1.6; ctx.setLineDash([4,4]);
+    ctx.beginPath(); ctx.moveTo(padL, Y(o.spot)); ctx.lineTo(W - padR, Y(o.spot)); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle = COL.blue; ctx.font = 'bold 10px system-ui'; ctx.textAlign = 'left';
+    ctx.fillText('SPOT ' + fmt2(o.spot), padL + 4, Y(o.spot) - 5);
+  }
+  // flip line
+  if (o.flip && o.flip > kLo && o.flip < kHi){
+    ctx.strokeStyle = COL.yellow; ctx.setLineDash([7,5]);
+    ctx.beginPath(); ctx.moveTo(padL, Y(o.flip)); ctx.lineTo(W - padR, Y(o.flip)); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle = COL.yellow; ctx.textAlign = 'left'; ctx.font = 'bold 10px system-ui';
+    ctx.fillText('FLIP ' + fmtPx(o.flip), padL + 4, Y(o.flip) - 5);
+  }
+  // wall labels
+  ctx.font = 'bold 10px system-ui';
+  if (o.callWall){ ctx.fillStyle = COL.green; ctx.textAlign = 'left'; ctx.fillText('CALL WALL ' + o.callWall, cx + 8, Y(o.callWall) - rowH); }
+  if (o.putWall){ ctx.fillStyle = COL.red; ctx.textAlign = 'right'; ctx.fillText('PUT WALL ' + o.putWall, cx - 8, Y(o.putWall) - rowH); }
+}
+$('liveGexCanvas').addEventListener('mousemove', e => {
+  const cv = $('liveGexCanvas');
+  if (!cv._rows) return;
+  const r = cv.getBoundingClientRect();
+  const my = e.clientY - r.top;
+  let best = null, bd = 8;
+  for (const row of cv._rows){ const d = Math.abs(row.y - my); if (d < bd){ bd = d; best = row.r; } }
+  cv.title = best ? `${best.k}: call OI ${best.cOI.toLocaleString()} (${(best.cGex/1e6).toFixed(0)}M) / put OI ${best.pOI.toLocaleString()} (${(best.pGex/1e6).toFixed(0)}M)` : '';
+});
+
+/* ---------- boot ---------- */
+document.addEventListener('DOMContentLoaded', () => { /* stay on Learn tab */ });
+
+</script>
+</body>
+</html>
