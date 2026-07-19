@@ -267,6 +267,8 @@ kbd{background:var(--surface3);border:1px solid var(--border);border-radius:5px;
         <div class="lvlLegend">
           <button id="chartModeBtn" style="padding:2px 10px;font-size:.75rem">🕯 Candles</button>
           <button id="gexModeBtn" style="padding:2px 10px;font-size:.75rem" title="Toggle the GEX pane between UW-style net-per-strike and call/put split">C|P split</button>
+          <button id="ladderModeBtn" style="padding:2px 10px;font-size:.75rem" title="Replay days only: live = ladder repriced each minute (anchored to the recorded net GEX), snapshot = the raw morning ladder">⏱ live ladder</button>
+          <button id="unitModeBtn" style="padding:2px 10px;font-size:.75rem" title="Ladder label units: dollars of hedging pressure per 1%, or UW-style contract-gamma numbers (like their site's ladder)"># cons</button>
           <span class="mut small">tf</span>
           <button class="tfBtn" data-tf="1" style="padding:2px 7px;font-size:.72rem;outline:2px solid var(--blue)">1m</button>
           <button class="tfBtn" data-tf="3" style="padding:2px 7px;font-size:.72rem">3m</button>
@@ -1136,6 +1138,71 @@ $('gexModeBtn').addEventListener('click', () => {
   if (DAY) drawPrice();
   if (typeof LIVEOUT !== 'undefined' && LIVEOUT) drawLiveProfile(LIVEOUT);
 });
+let ladderMode = 'live';
+$('ladderModeBtn').addEventListener('click', () => {
+  ladderMode = ladderMode === 'live' ? 'snap' : 'live';
+  $('ladderModeBtn').textContent = ladderMode === 'live' ? '⏱ live ladder' : '📷 9:30 snapshot';
+  if (DAY) drawPrice();
+});
+let unitMode = 'usd';
+$('unitModeBtn').addEventListener('click', () => {
+  unitMode = unitMode === 'usd' ? 'cons' : 'usd';
+  $('unitModeBtn').textContent = unitMode === 'usd' ? '# cons' : '$ usd';
+  if (DAY) drawPrice();
+});
+/* per-strike $→UW-units conversion factor (from the morning ladder's dual columns) */
+function unitFactor(k){
+  if (!DAY || !DAY.realLadder) return null;
+  if (!DAY._morn){
+    DAY._morn = new Map();
+    for (const r of DAY.realLadder){
+      const d = (r[1] || 0) + (r[2] || 0);
+      const u = (r[3] == null && r[4] == null) ? null : (r[3] || 0) + (r[4] || 0);
+      DAY._morn.set(r[0], (u != null && d) ? u/d : null);
+    }
+  }
+  return DAY._morn.get(k) ?? null;
+}
+function fmtStripVal(k, netD){
+  if (unitMode === 'cons'){
+    const f = unitFactor(k);
+    if (f != null){
+      const v = netD*f, a = Math.abs(v);
+      return (v < 0 ? '−' : '') + (a >= 1e6 ? (a/1e6).toFixed(1)+'M' : a >= 1e3 ? (a/1e3).toFixed(1)+'k' : a.toFixed(0));
+    }
+  }
+  const a = Math.abs(netD);
+  return (netD < 0 ? '−' : '') + (a >= 0.95e9 ? (a/1e9).toFixed(1)+'b' : Math.round(a/1e6)+'m');
+}
+/* the ladder as displayed at any minute — $ values (geometry & levels basis) */
+function stripProfile(minute){
+  if (DAY.realLadder && ladderMode === 'snap')
+    return DAY.realLadder.map(r => ({ k: r[0], cGex: r[1] || 0, pGex: r[2] || 0, cOI: 1, pOI: 1 }));
+  const T = Math.max((390 - minute)/E.YEAR_MIN, 1e-8);
+  DAY.sc.chain.ivNow = DAY.iv[minute];
+  let rows = E.gexProfile(DAY.sc.chain, DAY.S[minute], T, false);
+  if (DAY.realLadder){
+    const rec = DAY.realNet ? DAY.realNet[minute] : null;
+    let net = 0;
+    for (const r of rows) net += r.cGex + r.pGex;
+    if (rec != null && net !== 0 && Math.sign(rec) === Math.sign(net)){
+      const f = Math.min(5, Math.max(0.2, rec/net));
+      rows = rows.map(r => ({ ...r, cGex: r.cGex*f, pGex: r.pGex*f }));
+    }
+  }
+  return rows;
+}
+/* 10/20/30-minutes-ago ladder nets, memoized per displayed minute */
+function stripHist(){
+  if (DAY._hc && DAY._hc.i === DAY.i) return DAY._hc;
+  const grab = m => {
+    const map = new Map();
+    for (const r of stripProfile(Math.max(0, m))) map.set(r.k, r.cGex + r.pGex);
+    return map;
+  };
+  DAY._hc = { i: DAY.i, p10: grab(DAY.i-10), p20: grab(DAY.i-20), p30: grab(DAY.i-30) };
+  return DAY._hc;
+}
 
 function advance(){
   if (!DAY || DAY.done) return;
@@ -1738,16 +1805,7 @@ function drawPrice(){
   // OI everywhere — the pane should look populated, like UW/SpotGamma).
   const sx = W - stripW;
   ctx.fillStyle = '#161615'; ctx.fillRect(sx, 0, stripW, H-padB+2);
-  let prof;
-  if (DAY.realLadder){
-    // REAL recorded ladder (dollar-calibrated) — drawn as-is, no model in between
-    prof = DAY.realLadder.filter(r => r[0] > ylo && r[0] < yhi)
-      .map(r => ({ k: r[0], cGex: r[1], pGex: r[2], cOI: 1, pOI: 1 }));
-  } else {
-    const T = currentT();
-    DAY.sc.chain.ivNow = DAY.iv[i];
-    prof = E.gexProfile(DAY.sc.chain, DAY.S[i], T, false).filter(r => r.k > ylo && r.k < yhi);
-  }
+  const prof = stripProfile(i).filter(r => r.k > ylo && r.k < yhi);
   const cx = sx + stripW*0.5;
   ctx.strokeStyle = COL.axis; ctx.beginPath(); ctx.moveTo(cx, padT); ctx.lineTo(cx, H-padB); ctx.stroke();
   const rowH = Math.max(2, Math.min(8, (H-padT-padB)/Math.max(1,prof.length) - 2));
@@ -1770,13 +1828,13 @@ function drawPrice(){
     ctx.font = 'bold 8px system-ui';
     for (const r of [...pos, ...neg]){
       const y = Y(r.k);
-      const a = Math.abs(r.net);
-      const lab = (r.net < 0 ? '−' : '') + (a >= 0.95e9 ? (a/1e9).toFixed(1) + 'b' : Math.round(a/1e6) + 'm');
+      const lab = fmtStripVal(r.k, r.net);
       if (r.net >= 0){ ctx.fillStyle = '#9be89b'; ctx.textAlign = 'left'; ctx.fillText(lab, cx + 3, y - rowH/2 - 2); }
       else { ctx.fillStyle = '#f3b3b3'; ctx.textAlign = 'right'; ctx.fillText(lab, cx - 3, y - rowH/2 - 2); }
     }
     ctx.fillStyle = COL.muted; ctx.font = '9px system-ui'; ctx.textAlign = 'center';
     ctx.fillText('− net +', cx, H - padB + 14);
+    cv._stripRows = withNet.map(r => ({ y: Y(r.k), k: r.k, net: r.net }));
   } else {
     const amp = v => Math.sqrt(Math.max(v, 0));
     let maxG = 0;
@@ -1798,7 +1856,7 @@ function drawPrice(){
   ctx.strokeStyle = COL.blue; ctx.setLineDash([3,3]);
   ctx.beginPath(); ctx.moveTo(sx, Y(DAY.S[i])); ctx.lineTo(W, Y(DAY.S[i])); ctx.stroke(); ctx.setLineDash([]);
   // store transforms for hover
-  cv._xform = { X, Y, plotW, ylo, yhi, i };
+  cv._xform = { X, Y, plotW, ylo, yhi, i, stripW };
 }
 function niceStep(raw){
   const mag = Math.pow(10, Math.floor(Math.log10(raw)));
@@ -1810,7 +1868,26 @@ $('priceCanvas').addEventListener('mousemove', e => {
   if (!DAY || !$('priceCanvas')._xform) return;
   const cv = $('priceCanvas'), r = cv.getBoundingClientRect();
   const { X, plotW, i } = cv._xform;
-  const mx = e.clientX - r.left;
+  const mx = e.clientX - r.left, myy = e.clientY - r.top;
+  if (mx > r.width - cv._xform.stripW && cv._stripRows){
+    let best = null, bd = 9;
+    for (const row of cv._stripRows){ const d = Math.abs(row.y - myy); if (d < bd){ bd = d; best = row; } }
+    const tip = $('chartTip');
+    if (!best){ tip.style.display = 'none'; return; }
+    const h = stripHist();
+    const hv = m => m.has(best.k) ? fmtStripVal(best.k, m.get(best.k)) : '—';
+    let pcLine = '';
+    if (DAY.dailyCloses && DAY.dailyCloses.length){
+      const pc = DAY.dailyCloses[DAY.dailyCloses.length-1];
+      pcLine = `<br><span class="mut">${(((best.k - pc)/pc)*100).toFixed(2)}% from prev close</span>`;
+    }
+    tip.style.display = 'block';
+    tip.style.left = Math.min(mx - 190, r.width - 200) + 'px';
+    tip.style.top = (myy + 12) + 'px';
+    tip.innerHTML = `<b>${best.k}</b><br>Gamma Exposure <b class="${best.net >= 0 ? 'up' : 'dn'}">${fmtStripVal(best.k, best.net)}</b>` +
+      `<br><span class="mut">10 min ago</span> ${hv(h.p10)}<br><span class="mut">20 min ago</span> ${hv(h.p20)}<br><span class="mut">30 min ago</span> ${hv(h.p30)}` + pcLine;
+    return;
+  }
   if (mx > plotW){ $('chartTip').style.display = 'none'; return; }
   const m = Math.max(0, Math.min(i, Math.round(mx/plotW*389)));
   const lv = curLevels(m);
@@ -2462,15 +2539,40 @@ async function runBackfill(){
           if (got) cOk++; else cFail++;
         } else cOk++;
         if (!day.ladder){
+          // pull BOTH per-strike views and merge: [k, call$, put$, callUnits, putUnits]
+          // — dollars (spot-exposures/strike) power net/walls; UW contract-style
+          // units (greek-exposure/strike) match what UW's own ladder tooltip shows
+          let dRows = null, uRows = null;
+          try {
+            const close = (T.daily.find(x => x.date === date) || {}).c;
+            const q = close ? `&min_strike=${Math.round(close*0.85)}&max_strike=${Math.round(close*1.15)}` : '';
+            const sj2 = await uwFetch(key, `/stock/${t}/spot-exposures/strike?date=${date}${q}`); reqCount++;
+            dRows = (sj2.data || sj2).map(r => {
+              const pg = +(r.put_gamma_oi ?? 0);
+              return [ +(r.strike ?? r.strike_price ?? r.price), +(r.call_gamma_oi ?? 0), pg <= 0 ? pg : -pg ];
+            }).filter(r => isFinite(r[0]) && r[0] > 0 && (r[1] !== 0 || r[2] !== 0));
+            if (dRows.length < 6) dRows = null;
+          } catch (e){}
           try {
             const gj = await uwFetch(key, `/stock/${t}/greek-exposure/strike?date=${date}`); reqCount++;
-            const rows = (gj.data || gj).map(r => [
+            uRows = (gj.data || gj).map(r => [
               +(r.strike ?? r.strike_price),
               +(r.call_gamma_exposure ?? r.call_gex ?? r.call_gamma ?? 0),
               +(r.put_gamma_exposure ?? r.put_gex ?? r.put_gamma ?? 0)
             ]).filter(r => isFinite(r[0]) && r[0] > 0);
-            if (rows.length > 5){ day.ladder = rows.sort((a,b) => a[0]-b[0]); lOk++; } else lFail++;
-          } catch (e){ lFail++; }
+            if (uRows.length < 6) uRows = null;
+          } catch (e){}
+          if (dRows || uRows){
+            const map = new Map();
+            for (const r of (dRows || [])) map.set(r[0], [r[0], r[1], r[2], null, null]);
+            for (const r of (uRows || [])){
+              const e = map.get(r[0]) || [r[0], 0, 0, null, null];
+              e[3] = r[1]; e[4] = r[2] <= 0 ? r[2] : -r[2];
+              map.set(r[0], e);
+            }
+            day.ladder = [...map.values()].sort((a,b) => a[0]-b[0]);
+            lOk++;
+          } else lFail++;
         } else if (day.ladder) lOk++;
         if (!day.spot){
           try {
@@ -2683,14 +2785,27 @@ function startReplayDay(t, date){
   for (let i = 0; i < 390; i++) ivArr[i] = iv - (iv*0.12)*(i/390);
   // calibrate: dollar reference = first recorded net GEX of the day (real $)
   const refNet = realNet.find(v => v !== null && v !== 0) ?? null;
-  const chain = chainFromLadder(D.ladder, S[0], iv, refNet);
-  // display ladder: real shape, scaled into dollars via the recorded net
-  let lSum = 0;
-  const nearL = D.ladder.filter(r => r[0] >= S[0]*0.92 && r[0] <= S[0]*1.08);
-  for (const r of nearL) lSum += r[1] + r[2];
-  const lScale = (refNet && lSum) ? Math.abs(refNet/lSum) : 1;
-  const realLadder = nearL.map(r => [r[0], r[1]*lScale, (r[2] <= 0 ? r[2] : -r[2])*lScale]);
-  const realLevels = levelsFromLadder(D.ladder, S[0]);
+  // normalize ladder rows to [k, call$, put$, callUnits, putUnits]
+  // handles: merged 5-tuples, legacy dollar 3-tuples, legacy UW-unit 3-tuples
+  const nearRaw = D.ladder.filter(r => r[0] >= S[0]*0.92 && r[0] <= S[0]*1.08);
+  let rows5 = nearRaw.map(r => r.length >= 5 ? [...r] : [r[0], r[1], r[2], null, null]);
+  let maxD = 0;
+  for (const r of rows5) maxD = Math.max(maxD, Math.abs(r[1] || 0), Math.abs(r[2] || 0));
+  if (maxD > 0 && maxD <= 1e7){
+    // legacy unit-ladder stored in the $ slots → shift into the unit slots
+    rows5 = rows5.map(r => [r[0], null, null, r[1], (r[2] <= 0 ? r[2] : -(r[2] || 0))]);
+  }
+  let uSum = 0;
+  for (const r of rows5) uSum += (r[3] || 0) + (r[4] || 0);
+  const uScale = (refNet && uSum) ? Math.abs(refNet/uSum) : 1;
+  const realLadder = rows5.map(r => {
+    const hasD = r[1] != null && (r[1] !== 0 || (r[2] || 0) !== 0);
+    const cg = hasD ? r[1] : (r[3] || 0)*uScale;
+    const pgRaw = hasD ? (r[2] || 0) : (r[4] || 0)*uScale;
+    return [r[0], cg, pgRaw <= 0 ? pgRaw : -pgRaw, r[3], r[4]];
+  });
+  const realLevels = levelsFromLadder(realLadder, S[0]);
+  const chain = chainFromLadder(realLadder, S[0], iv, refNet);
   const sc = { type: 'replay', name: 'Replay ' + t + ' ' + date, hint: '', chain, spot0: S[0],
     ivOpen: iv, ivClose: ivArr[389], ivPath: ivArr, rvMult: 1, eventMin: null, eventBias: 0 };
   const hasSpot = !!D.spot;
