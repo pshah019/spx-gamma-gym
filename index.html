@@ -258,6 +258,7 @@ kbd{background:var(--surface3);border:1px solid var(--border);border-radius:5px;
           <div id="chartTip"></div>
         </div>
         <div class="lvlLegend">
+          <button id="chartModeBtn" style="padding:2px 10px;font-size:.75rem">🕯 Candles</button>
           <span><span class="k" style="border-color:#3987e5"></span>SPX</span>
           <span><span class="k" style="border-color:#0ca30c"></span>Call wall</span>
           <span><span class="k" style="border-color:#e66767"></span>Put wall</span>
@@ -370,7 +371,7 @@ kbd{background:var(--surface3);border:1px solid var(--border);border-radius:5px;
         <div class="stat"><div class="lab">Regime</div><div class="val" id="lvRegime">—</div></div>
       </div>
       <canvas id="liveGexCanvas" height="460"></canvas>
-      <div class="small mut" style="margin-top:6px">Green = call GEX, red = put GEX (naive dealer convention). Hover for per-strike detail.</div>
+      <div class="small mut" style="margin-top:6px">Green = call GEX, red = put GEX (naive dealer convention). Bar length is √-scaled so the ladder strikes stay visible next to the walls. Hover for per-strike detail.</div>
     </div>
     <div class="card" style="max-width:880px">
       <h3>Today's playbook (auto-generated)</h3>
@@ -499,13 +500,17 @@ function gexCurve(chain, S0, T, useTrueSigns, span){
 }
 function keyLevels(chain, S, T){
   const prof = gexProfile(chain, S, T, false);      // levels from the NAIVE map (what tools display)
+  // convention: call wall is the biggest call-gamma strike AT/ABOVE spot,
+  // put wall the biggest put-gamma strike AT/BELOW spot (walls trail price)
   let cw = null, cwv = 0, pw = null, pwv = 0, mag = null, magv = 0;
   for (const r of prof){
-    if (r.cGex > cwv){ cwv = r.cGex; cw = r.k; }
-    if (r.pGex < pwv){ pwv = r.pGex; pw = r.k; }
+    if (r.k >= S && r.cGex > cwv){ cwv = r.cGex; cw = r.k; }
+    if (r.k <= S && r.pGex < pwv){ pwv = r.pGex; pw = r.k; }
     const tot = Math.abs(r.cGex) + Math.abs(r.pGex);
     if (tot > magv){ magv = tot; mag = r.k; }
   }
+  if (cw === null){ for (const r of prof) if (r.cGex > cwv){ cwv = r.cGex; cw = r.k; } }
+  if (pw === null){ for (const r of prof) if (r.pGex < pwv){ pwv = r.pGex; pw = r.k; } }
   const curve = gexCurve(chain, S, T, false);
   return { callWall: cw, putWall: pw, magnet: mag, flip: curve.flip, curve,
            net: gexAtSpot(chain, S, T, false) };
@@ -513,21 +518,29 @@ function keyLevels(chain, S, T){
 
 /* ---------- chain construction ---------- */
 function strikeGrid(spot){
-  const c = Math.round(spot/5)*5;
+  // realistic SPX-style ladder: 5s near money, 10s to ±4.5%, 25s out to ±10%
   const ks = new Set();
-  for (let k=c-Math.round(spot*0.012/5)*5; k<=c+Math.round(spot*0.012/5)*5; k+=5) ks.add(k);
-  for (let k=c-Math.round(spot*0.025/10)*10; k<=c+Math.round(spot*0.025/10)*10; k+=10) ks.add(k);
-  for (let k=Math.round(spot*0.955/25)*25; k<=Math.round(spot*1.045/25)*25; k+=25) ks.add(k);
+  const r = (k,m) => Math.round(k/m)*m;
+  for (let k=r(spot*0.98,5); k<=r(spot*1.02,5); k+=5) ks.add(k);
+  for (let k=r(spot*0.955,10); k<=r(spot*1.045,10); k+=10) ks.add(k);
+  for (let k=r(spot*0.90,25); k<=r(spot*1.10,25); k+=25) ks.add(k);
   return [...ks].sort((a,b)=>a-b);
 }
 function baseOI(k, spot, rng, side){
-  // side: 'c' or 'p'; distance-decaying OI with round-number boosts
+  // three structural components, mirroring real SPX open interest:
+  // (1) near-the-money trading activity, (2) a hedging LADDER — puts stacked
+  // far below spot (protection), calls stacked above (overwrites) — that
+  // decays slowly, (3) round-number concentration (25/50/100 strikes).
   const d = (k - spot)/spot;
-  const rightSide = side==='c' ? Math.exp(-Math.pow((d-0.006)/0.016,2)) : Math.exp(-Math.pow((d+0.008)/0.018,2));
-  let oi = 260 + 2100*rightSide;
-  if (k % 25 === 0) oi *= 1.7;
-  if (k % 100 === 0) oi *= 2.1;
-  oi *= (0.6 + 0.8*rng());
+  const atm = side==='c' ? Math.exp(-Math.pow((d-0.006)/0.016,2)) : Math.exp(-Math.pow((d+0.008)/0.018,2));
+  const ladder = side==='c'
+    ? (d >= 0 ? Math.exp(-d/0.045) : 0.45*Math.exp(d/0.02))
+    : (d <= 0 ? Math.exp(d/0.06) : 0.40*Math.exp(-d/0.025));
+  let oi = 110 + 1500*atm + 950*ladder;
+  if (k % 25 === 0) oi *= 1.8;
+  if (k % 50 === 0) oi *= 1.25;
+  if (k % 100 === 0) oi *= 1.9;
+  oi *= (0.55 + 0.9*rng());
   return Math.round(oi);
 }
 function makeChain(spot, rng, opts){
@@ -595,6 +608,8 @@ function makeScenario(type, seed){
       chain = makeChain(spot0, rng, { ivBase: 0.235, skew: 1.3, curve: 1.0 });
       addCluster(chain, Math.round(spot0*1.012/25)*25, 'c', 4200);
       addCluster(chain, Math.round(spot0*0.972/25)*25, 'p', 6400 + rng()*2400);
+      addCluster(chain, Math.round(spot0*0.945/25)*25, 'p', 3400);
+      addCluster(chain, Math.round(spot0*0.92/25)*25, 'p', 2600);
       tuneFlip(chain, spot0, T0, spot0*(1.006 + rng()*0.005));   // flip ABOVE spot → negative regime
       name = 'Risk-off open'; ivOpen = 0.235; ivClose = 0.30; rvMult = 1.5; eventBias = -1;
       hint = 'Futures soft overnight; vol bid; spot opens below the flip.';
@@ -670,8 +685,8 @@ function genScenarioPath(sc){
         if (d < 0.004) drift += sigMin*0.9*(1 - d/0.004);
       }
     } else {
-      sig *= (1 + 0.55*Math.min(-Gn, 1.8));
-      drift += 0.32*ema*Math.min(-Gn, 1.8);
+      sig *= (1 + 0.48*Math.min(-Gn, 1.7));
+      drift += 0.27*ema*Math.min(-Gn, 1.7);
       drift += sc.eventBias*sigMin*0.13;
     }
     if (sc.eventMin !== null && i === sc.eventMin){
@@ -854,7 +869,10 @@ const E = { mulberry32, gaussMaker, bs, normCdf, smileIV, gexAtSpot, gexProfile,
 const $ = id => document.getElementById(id);
 const fmt$ = v => (v<0?'-$':'$') + Math.abs(v).toLocaleString(undefined,{maximumFractionDigits:0});
 const fmt2 = v => v.toLocaleString(undefined,{minimumFractionDigits:2, maximumFractionDigits:2});
-const fmtBn = v => (v/1e9 >= 0 ? '+' : '−') + '$' + Math.abs(v/1e9).toFixed(1) + 'bn';
+const fmtBn = v => {
+  const s = v >= 0 ? '+' : '−', a = Math.abs(v);
+  return a >= 0.95e9 ? s + '$' + (a/1e9).toFixed(1) + 'bn' : s + '$' + Math.max(1, Math.round(a/1e6)) + 'm';
+};
 const fmtPx = v => v.toLocaleString(undefined,{maximumFractionDigits:0});
 function minToClock(i){
   const t = 9*60+30 + i;
@@ -946,6 +964,11 @@ let lastSpeed = 1;
 document.querySelectorAll('.spd').forEach(b => b.addEventListener('click', () => { lastSpeed = +b.dataset.speed; setSpeed(lastSpeed); }));
 $('stepBtn').addEventListener('click', () => { if (!DAY.done) { advance(); } });
 $('newDayBtn').addEventListener('click', newDay);
+$('chartModeBtn').addEventListener('click', () => {
+  chartMode = chartMode === 'line' ? 'candles' : 'line';
+  $('chartModeBtn').textContent = chartMode === 'line' ? '🕯 Candles' : '📈 Line';
+  if (DAY) drawPrice();
+});
 
 function advance(){
   if (!DAY || DAY.done) return;
@@ -1349,6 +1372,7 @@ const COL = { blue:'#3987e5', green:'#0ca30c', red:'#e66767', yellow:'#c98500', 
   grid:'#2c2c2a', axis:'#383835', ink:'#ffffff', ink2:'#c3c2b7', muted:'#898781', surface:'#1a1a19' };
 
 let yState = { lo: null, hi: null };
+let chartMode = 'line';
 function drawPrice(){
   const cv = $('priceCanvas');
   const { ctx, W, H } = setupCanvas(cv, 430);
@@ -1405,10 +1429,29 @@ function drawPrice(){
   levelLine(lv.putWall, COL.red, [], 'PW ' + lv.putWall);
   levelLine(lv.flip, COL.yellow, [7,5], 'FLIP ' + (lv.flip?fmtPx(lv.flip):''));
   if (lv.magnet !== lv.callWall && lv.magnet !== lv.putWall) levelLine(lv.magnet, COL.violet, [2,4], 'MAG ' + lv.magnet);
-  // price path
-  ctx.strokeStyle = COL.blue; ctx.lineWidth = 2; ctx.beginPath();
-  for (let j=0;j<=i;j++){ const x = X(j), y = Y(DAY.S[j]); j===0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y); }
-  ctx.stroke();
+  // price path: line or 5-minute candles
+  if (chartMode === 'candles'){
+    const cw5 = Math.max(2, (X(5) - X(0)) * 0.62);
+    for (let b = 0; b*5 <= i; b++){
+      const s0 = b*5, s1 = Math.min(s0+4, i);
+      const openP = s0 === 0 ? DAY.S[0] : DAY.S[s0-1];
+      let hiP = openP, loP = openP;
+      for (let j=s0; j<=s1; j++){ if (DAY.S[j] > hiP) hiP = DAY.S[j]; if (DAY.S[j] < loP) loP = DAY.S[j]; }
+      const closeP = DAY.S[s1];
+      const xc = X(s0 + 2);
+      const up = closeP >= openP;
+      ctx.strokeStyle = up ? COL.green : COL.red;
+      ctx.fillStyle = up ? COL.green : COL.red;
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(xc, Y(hiP)); ctx.lineTo(xc, Y(loP)); ctx.stroke();
+      const yTop = Y(Math.max(openP, closeP)), yBot = Y(Math.min(openP, closeP));
+      ctx.fillRect(xc - cw5/2, yTop, cw5, Math.max(yBot - yTop, 1));
+    }
+  } else {
+    ctx.strokeStyle = COL.blue; ctx.lineWidth = 2; ctx.beginPath();
+    for (let j=0;j<=i;j++){ const x = X(j), y = Y(DAY.S[j]); j===0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y); }
+    ctx.stroke();
+  }
   // current price dot + open ref
   ctx.fillStyle = COL.blue; ctx.beginPath(); ctx.arc(X(i), Y(DAY.S[i]), 3.5, 0, 7); ctx.fill();
   ctx.strokeStyle = 'rgba(255,255,255,.25)'; ctx.setLineDash([2,5]);
@@ -1425,24 +1468,29 @@ function drawPrice(){
     ctx.strokeStyle = COL.surface; ctx.lineWidth = 1; ctx.stroke();
   }
   // ---- GEX strip (right) ----
+  // √-scaled bar lengths: without it the wall strikes visually erase the
+  // smaller-but-real gamma ladder at every other strike (real chains have
+  // OI everywhere — the pane should look populated, like UW/SpotGamma).
   const sx = W - stripW;
   ctx.fillStyle = '#161615'; ctx.fillRect(sx, 0, stripW, H-padB+2);
   const T = currentT();
   DAY.sc.chain.ivNow = DAY.iv[i];
   const prof = E.gexProfile(DAY.sc.chain, DAY.S[i], T, false).filter(r => r.k > ylo && r.k < yhi);
+  const amp = v => Math.sqrt(Math.max(v, 0));
   let maxG = 0;
-  for (const r of prof) maxG = Math.max(maxG, r.cGex, -r.pGex);
+  for (const r of prof) maxG = Math.max(maxG, amp(r.cGex), amp(-r.pGex));
+  if (!maxG) maxG = 1;
   const cx = sx + stripW*0.5;
   ctx.strokeStyle = COL.axis; ctx.beginPath(); ctx.moveTo(cx, padT); ctx.lineTo(cx, H-padB); ctx.stroke();
   const rowH = Math.max(2, Math.min(8, (H-padT-padB)/Math.max(1,prof.length) - 2));
   for (const r of prof){
     const y = Y(r.k);
-    const cl = r.cGex/maxG * (stripW*0.46);
-    const pl = -r.pGex/maxG * (stripW*0.46);
+    const cl = amp(r.cGex)/maxG * (stripW*0.46);
+    const pl = amp(-r.pGex)/maxG * (stripW*0.46);
     ctx.fillStyle = COL.green;
-    if (cl > 0.5) ctx.fillRect(cx+1, y-rowH/2, cl, rowH);
+    if (r.cOI > 0) ctx.fillRect(cx+1, y-rowH/2, Math.max(cl, 1.2), rowH);
     ctx.fillStyle = COL.red;
-    if (pl > 0.5) ctx.fillRect(cx-1-pl, y-rowH/2, pl, rowH);
+    if (r.pOI > 0) ctx.fillRect(cx-1-Math.max(pl, 1.2), y-rowH/2, Math.max(pl, 1.2), rowH);
   }
   ctx.fillStyle = COL.muted; ctx.font = '9px system-ui'; ctx.textAlign = 'center';
   ctx.fillText('puts | calls', cx, H - padB + 14);
@@ -1758,7 +1806,9 @@ function drawLiveProfile(o){
   const prof = o.profile.filter(r => Math.abs(r.cGex) + Math.abs(r.pGex) > 0);
   if (!prof.length) return;
   const kLo = Math.min(...prof.map(r => r.k)), kHi = Math.max(...prof.map(r => r.k));
-  let maxG = 0; for (const r of prof) maxG = Math.max(maxG, r.cGex, -r.pGex);
+  const amp = v => Math.sqrt(Math.max(v, 0));
+  let maxG = 0; for (const r of prof) maxG = Math.max(maxG, amp(r.cGex), amp(-r.pGex));
+  if (!maxG) maxG = 1;
   const padL = 64, padR = 16, padT = 10, padB = 20;
   const cx = padL + (W - padL - padR)/2;
   const Y = k => padT + (kHi - k)/(kHi - kLo || 1)*(H - padT - padB);
@@ -1767,10 +1817,10 @@ function drawLiveProfile(o){
   cv._rows = [];
   for (const r of prof){
     const y = Y(r.k);
-    const cl = r.cGex/maxG*(W - padL - padR)/2*0.94;
-    const pl = -r.pGex/maxG*(W - padL - padR)/2*0.94;
-    if (cl > 0.4){ ctx.fillStyle = COL.green; ctx.fillRect(cx+1, y - rowH/2, cl, rowH); }
-    if (pl > 0.4){ ctx.fillStyle = COL.red; ctx.fillRect(cx-1-pl, y - rowH/2, pl, rowH); }
+    const cl = amp(r.cGex)/maxG*(W - padL - padR)/2*0.94;
+    const pl = amp(-r.pGex)/maxG*(W - padL - padR)/2*0.94;
+    if (r.cOI > 0){ ctx.fillStyle = COL.green; ctx.fillRect(cx+1, y - rowH/2, Math.max(cl, 1.2), rowH); }
+    if (r.pOI > 0){ ctx.fillStyle = COL.red; ctx.fillRect(cx-1-Math.max(pl, 1.2), y - rowH/2, Math.max(pl, 1.2), rowH); }
     cv._rows.push({ y, r });
   }
   // strike labels for round numbers
