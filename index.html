@@ -342,6 +342,23 @@ kbd{background:var(--surface3);border:1px solid var(--border);border-radius:5px;
 
 <!-- ================= LIVE ================= -->
 <section class="tabpane" id="tab-live">
+  <div class="card" id="histCard">
+    <h3>Real daily GEX history — 2011 → yesterday <span class="q" data-tip="SqueezeMetrics' free daily dataset: SPX close, DIX (dark-pool buying), and their net GEX estimate in dollars. One aggregate number per day — per-strike walls can't be rebuilt for past days, but regime history can. Click any day to inspect it, then practice a simulated session calibrated to that day's real net GEX and realized volatility.">?</span></h3>
+    <div class="rowflex" style="align-items:center;margin-bottom:6px">
+      <button class="hrange" data-r="63">3m</button>
+      <button class="hrange" data-r="126">6m</button>
+      <button class="hrange" data-r="252" style="outline:2px solid var(--blue)">1y</button>
+      <button class="hrange" data-r="1260">5y</button>
+      <button class="hrange" data-r="0">All</button>
+      <span id="histStatus" class="small mut">loading…</span>
+    </div>
+    <div style="position:relative">
+      <canvas id="histCanvas" height="300"></canvas>
+      <div id="histTip" style="position:absolute;pointer-events:none;background:#0a0a09;border:1px solid var(--border);border-radius:8px;padding:7px 10px;font-size:.76rem;display:none;z-index:30;line-height:1.5;white-space:nowrap"></div>
+    </div>
+    <div id="histDetail" class="small ink2" style="margin-top:8px">Click a day on the chart to inspect it and practice its regime.</div>
+    <div class="disclose">Source: SqueezeMetrics DIX/GEX daily file (their dealer-positioning model; free, end-of-day). Top pane: SPX close. Bottom pane: net GEX — green positive, red negative.</div>
+  </div>
   <h2 style="margin:6px 0 4px">Today's real SPX gamma map</h2>
   <p class="ink2" style="max-width:860px;line-height:1.55;font-size:.9rem">This builds the same GEX profile from <strong>real CBOE delayed options data</strong> (free, ~15-min delay, includes real open interest, IV and gamma per strike). Use it before or during the session to see where today's walls and flip actually are — then practice against the same levels in the sim.</p>
   <div class="card" style="max-width:880px">
@@ -575,6 +592,17 @@ function addCluster(chain, k0, side, amount){
 }
 function scaleSide(chain, side, mult){
   for (const r of chain.strikes){ if (side==='c') r.cOI = Math.round(r.cOI*mult); else r.pOI = Math.round(r.pOI*mult); }
+}
+/* tune total put OI so the naive net GEX at spot matches a target $ value */
+function tuneNet(chain, spot, T, targetNet){
+  const base = chain.strikes.map(r => r.pOI);
+  let lo = 0.05, hi = 14;
+  for (let it=0; it<22; it++){
+    const mid = (lo+hi)/2;
+    chain.strikes.forEach((r,i) => r.pOI = Math.round(base[i]*mid));
+    const n = gexAtSpot(chain, spot, T, false);
+    if (n > targetNet) lo = mid; else hi = mid;   // net is decreasing in put OI
+  }
 }
 /* tune total put OI so the naive flip lands near targetFlip */
 function tuneFlip(chain, spot, T, targetFlip){
@@ -863,13 +891,13 @@ function parseCboe(json, mode, nowMs){
 if (typeof module !== 'undefined') module.exports = {
   mulberry32, gaussMaker, bs, normCdf, smileIV, gexAtSpot, gexProfile, gexCurve,
   keyLevels, makeChain, makeScenario, genScenarioPath, bridgePath, quote, parseCboe,
-  strikeGrid, tuneFlip, addCluster, T0, YEAR_MIN, FEE
+  strikeGrid, tuneFlip, tuneNet, addCluster, T0, YEAR_MIN, FEE
 };
 
 /* browser glue: expose engine as E (matches the node test harness) */
 const E = { mulberry32, gaussMaker, bs, normCdf, smileIV, gexAtSpot, gexProfile, gexCurve,
   keyLevels, makeChain, makeScenario, genScenarioPath, bridgePath, quote, parseCboe,
-  strikeGrid, tuneFlip, addCluster, T0, YEAR_MIN, FEE };
+  strikeGrid, tuneFlip, tuneNet, addCluster, T0, YEAR_MIN, FEE };
 /* ============================================================
    SPX Gamma Gym — app layer (DOM, charts, trading, coach, cases)
    ============================================================ */
@@ -946,7 +974,7 @@ function startDay(cfg){
     lvT: buildLevelTimeline(cfg.sc, cfg.S)
   };
   setSpeed(0);
-  $('dayTitle').textContent = cfg.isCase ? '◆ ' + cfg.title : '';
+  $('dayTitle').textContent = (cfg.isCase || (cfg.sc && cfg.sc.type === 'hist')) ? '◆ ' + cfg.title : '';
   $('coachFeed').innerHTML = '';
   $('blotter').querySelector('tbody').innerHTML = '';
   $('noTrades').style.display = '';
@@ -1904,6 +1932,162 @@ $('liveGexCanvas').addEventListener('mousemove', e => {
   for (const row of cv._rows){ const d = Math.abs(row.y - my); if (d < bd){ bd = d; best = row.r; } }
   cv.title = best ? `${best.k}: call OI ${best.cOI.toLocaleString()} (${(best.cGex/1e6).toFixed(0)}M) / put OI ${best.pOI.toLocaleString()} (${(best.pGex/1e6).toFixed(0)}M)` : '';
 });
+
+/* ============================================================
+   REAL DAILY GEX HISTORY (SqueezeMetrics DIX/GEX file)
+============================================================ */
+let HISTROWS = null, histRange = 252, histSel = -1, histLoading = false;
+
+async function loadDix(){
+  if (HISTROWS || histLoading) return;
+  histLoading = true;
+  const st = $('histStatus');
+  const sources = ['/api/dix', 'https://squeezemetrics.com/monitor/static/DIX.csv'];
+  for (const url of sources){
+    try {
+      const r = await fetch(url);
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const text = await r.text();
+      const rows = [];
+      for (const line of text.trim().split('\n').slice(1)){
+        const p = line.trim().split(',');
+        if (p.length < 4) continue;
+        rows.push({ date: p[0], price: +p[1], dix: +p[2], gex: +p[3] });
+      }
+      if (rows.length < 100) throw new Error('unexpected format');
+      HISTROWS = rows;
+      st.textContent = rows.length + ' trading days · ' + rows[0].date + ' → ' + rows[rows.length-1].date;
+      drawHist();
+      histLoading = false;
+      return;
+    } catch (err) { /* try next */ }
+  }
+  st.textContent = 'Could not load history here (works on the deployed site).';
+  histLoading = false;
+}
+document.querySelectorAll('.hrange').forEach(b => b.addEventListener('click', () => {
+  histRange = +b.dataset.r;
+  document.querySelectorAll('.hrange').forEach(x => x.style.outline = x === b ? '2px solid var(--blue)' : 'none');
+  histSel = -1; drawHist();
+}));
+
+function histSlice(){
+  if (!HISTROWS) return [];
+  return histRange > 0 ? HISTROWS.slice(-histRange) : HISTROWS;
+}
+function drawHist(){
+  const cv = $('histCanvas');
+  if (!HISTROWS) return;
+  const { ctx, W, H } = setupCanvas(cv, 300);
+  ctx.fillStyle = COL.surface; ctx.fillRect(0, 0, W, H);
+  const rows = histSlice();
+  const n = rows.length;
+  if (!n) return;
+  const padL = 8, padR = 64, padB = 18, gap = 8;
+  const plotW = W - padL - padR;
+  const priceH = (H - padB - gap) * 0.60, gexTop = priceH + gap, gexH = H - padB - gexTop;
+  let pLo = Infinity, pHi = -Infinity, gMax = 0;
+  for (const r of rows){
+    if (r.price < pLo) pLo = r.price;
+    if (r.price > pHi) pHi = r.price;
+    if (Math.abs(r.gex) > gMax) gMax = Math.abs(r.gex);
+  }
+  const pad = (pHi - pLo) * 0.06 || 1; pLo -= pad; pHi += pad;
+  if (!gMax) gMax = 1;
+  const X = i => padL + i/(n-1 || 1)*plotW;
+  const PY = p => (pHi - p)/(pHi - pLo)*priceH;
+  const GY = g => gexTop + gexH/2 - (g/gMax)*(gexH/2 - 2);
+  // grid + labels
+  ctx.strokeStyle = COL.grid; ctx.fillStyle = COL.muted; ctx.font = '10px system-ui'; ctx.textAlign = 'left';
+  const pstep = niceStep((pHi - pLo)/4);
+  for (let p = Math.ceil(pLo/pstep)*pstep; p < pHi; p += pstep){
+    ctx.beginPath(); ctx.moveTo(padL, PY(p)); ctx.lineTo(padL + plotW, PY(p)); ctx.stroke();
+    ctx.fillText(fmtPx(p), padL + plotW + 6, PY(p) + 3);
+  }
+  ctx.strokeStyle = COL.axis;
+  ctx.beginPath(); ctx.moveTo(padL, GY(0)); ctx.lineTo(padL + plotW, GY(0)); ctx.stroke();
+  ctx.fillText('net GEX', padL + plotW + 6, GY(0) + 3);
+  // year ticks
+  ctx.textAlign = 'center';
+  let lastYr = '';
+  for (let i = 0; i < n; i += Math.max(1, Math.floor(n/12))){
+    const yr = rows[i].date.slice(0, histRange && histRange <= 252 ? 7 : 4);
+    if (yr !== lastYr){ lastYr = yr; ctx.fillText(yr, X(i), H - 5); }
+  }
+  // gex bars
+  const bw = Math.max(1, plotW/n - 0.4);
+  for (let i = 0; i < n; i++){
+    const g = rows[i].gex;
+    ctx.fillStyle = g >= 0 ? COL.green : COL.red;
+    const y0 = GY(0), y1 = GY(g);
+    ctx.fillRect(X(i) - bw/2, Math.min(y0, y1), bw, Math.max(Math.abs(y1 - y0), 1));
+  }
+  // price line
+  ctx.strokeStyle = COL.blue; ctx.lineWidth = 1.6; ctx.beginPath();
+  for (let i = 0; i < n; i++){ i === 0 ? ctx.moveTo(X(i), PY(rows[i].price)) : ctx.lineTo(X(i), PY(rows[i].price)); }
+  ctx.stroke();
+  // selection marker
+  if (histSel >= 0 && histSel < n){
+    ctx.strokeStyle = COL.yellow; ctx.setLineDash([4,4]);
+    ctx.beginPath(); ctx.moveTo(X(histSel), 0); ctx.lineTo(X(histSel), H - padB); ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  cv._hx = { X, n, padL, plotW };
+}
+$('histCanvas').addEventListener('mousemove', e => {
+  const cv = $('histCanvas');
+  if (!cv._hx || !HISTROWS) return;
+  const r = cv.getBoundingClientRect();
+  const rows = histSlice();
+  const i = Math.max(0, Math.min(cv._hx.n - 1, Math.round((e.clientX - r.left - cv._hx.padL)/cv._hx.plotW*(cv._hx.n - 1))));
+  const d = rows[i];
+  const tip = $('histTip');
+  tip.style.display = 'block';
+  tip.style.left = Math.min(e.clientX - r.left + 14, r.width - 200) + 'px';
+  tip.style.top = (e.clientY - r.top + 12) + 'px';
+  tip.innerHTML = `<b>${d.date}</b><br>SPX ${fmt2(d.price)}<br>net GEX <b class="${d.gex >= 0 ? 'up' : 'dn'}">${fmtBn(d.gex)}</b><br><span class="mut">DIX ${(d.dix*100).toFixed(1)}%</span>`;
+});
+$('histCanvas').addEventListener('mouseleave', () => $('histTip').style.display = 'none');
+$('histCanvas').addEventListener('click', e => {
+  const cv = $('histCanvas');
+  if (!cv._hx || !HISTROWS) return;
+  const r = cv.getBoundingClientRect();
+  histSel = Math.max(0, Math.min(cv._hx.n - 1, Math.round((e.clientX - r.left - cv._hx.padL)/cv._hx.plotW*(cv._hx.n - 1))));
+  drawHist();
+  const rows = histSlice();
+  const d = rows[histSel];
+  const globalIdx = HISTROWS.indexOf(d);
+  $('histDetail').innerHTML = `<b>${d.date}</b> — SPX ${fmt2(d.price)}, net GEX <b class="${d.gex >= 0 ? 'up' : 'dn'}">${fmtBn(d.gex)}</b>, DIX ${(d.dix*100).toFixed(1)}% · ` +
+    (d.gex >= 0 ? 'stabilizing regime that day' : 'amplifying regime that day') +
+    ` &nbsp; <button onclick="practiceHistDay(${globalIdx})" class="primary" style="padding:3px 12px;font-size:.78rem">Practice a day calibrated to this</button>`;
+});
+function practiceHistDay(idx){
+  const d = HISTROWS[idx];
+  // realized vol from the prior 21 real closes
+  let rv = 0.14;
+  if (idx > 22){
+    const rets = [];
+    for (let j = idx - 21; j < idx; j++) rets.push(Math.log(HISTROWS[j + 1].price/HISTROWS[j].price));
+    const mean = rets.reduce((a, b) => a + b, 0)/rets.length;
+    rv = Math.sqrt(rets.reduce((a, b) => a + (b - mean)*(b - mean), 0)/rets.length)*Math.sqrt(252);
+  }
+  const iv = Math.min(0.9, Math.max(0.08, rv*1.2));
+  const seed = (Math.random()*1e9)|0;
+  const rng = E.mulberry32(seed);
+  const spot0 = Math.round(d.price/5)*5;
+  const chain = E.makeChain(spot0, rng, { ivBase: iv, skew: iv > 0.25 ? 1.4 : 0.9, curve: 1.0 });
+  E.tuneNet(chain, spot0, E.T0, d.gex);      // match the day's REAL net GEX
+  const sc = { type: 'hist', name: 'Regime of ' + d.date, hint: '', chain, spot0,
+    ivOpen: iv, ivClose: Math.max(0.07, iv*0.85), rvMult: 1, eventMin: null, eventBias: 0,
+    seed, rng, gz: E.gaussMaker(rng) };
+  const path = E.genScenarioPath(sc);
+  sc.ivPath = path.iv;
+  startDay({ sc, S: path.S, iv: path.iv, gTrue: path.gArr,
+    title: 'Calibrated to ' + d.date + ' (real net GEX ' + fmtBn(d.gex) + ', rv ' + (rv*100).toFixed(0) + '%)',
+    isCase: false, caseObj: null });
+  coachSay(`This session is <b>calibrated to ${d.date}</b>: the chain is tuned so net dealer gamma matches SqueezeMetrics' real reading (${fmtBn(d.gex)}), and volatility matches the realized vol of the prior month (${(rv*100).toFixed(0)}% annualized). The intraday path is simulated — the regime is real.`, 'info');
+}
+document.querySelector('nav button[data-tab="live"]').addEventListener('click', () => loadDix());
 
 /* ---------- boot ---------- */
 document.addEventListener('DOMContentLoaded', () => { /* stay on Learn tab */ });
