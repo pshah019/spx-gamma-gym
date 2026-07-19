@@ -138,8 +138,6 @@ kbd{background:var(--surface3);border:1px solid var(--border);border-radius:5px;
   <nav>
     <button data-tab="learn" class="active">Learn</button>
     <button data-tab="sim">Practice Sim</button>
-    <button data-tab="cases">Case Studies</button>
-    <button data-tab="live">Live GEX</button>
     <button data-tab="data">Data &amp; Replay</button>
   </nav>
   <div id="modeBadge">paper-trading trainer · not investment advice</div>
@@ -1564,7 +1562,6 @@ function showReport(settleNote){
   if (DAY.isCase && DAY.caseObj) html += `<div class="callout" style="border-left-color:var(--violet)"><b>What actually happened — ${DAY.caseObj.date}</b><br>${DAY.caseObj.debrief}</div>`;
   if (!DAY.isCase && DAY.sc.type === 'squeeze0dte') html += `<div class="callout warn"><b>The trap, revealed:</b> today's "call wall" was customer-bought 0DTE calls — dealers were <i>short</i> them. Every tick higher forced dealer buying, so the wall acted as an accelerant, not resistance. Lesson: GEX maps assume dealer positioning; when the tape disagrees with the map (walls not holding, momentum through levels), trust the tape.</div>`;
   html += `<p style="display:flex;gap:10px"><button class="primary" onclick="closeModal();newDay()">New day</button>
-    <button onclick="closeModal();switchTab('cases')">Case studies</button>
     <button onclick="closeModal()">Review the chart</button></p>`;
   $('modalBox').innerHTML = html;
   $('modal').classList.add('open');
@@ -2442,7 +2439,7 @@ function practiceHistDay(idx){
     dailyCloses: HISTROWS.slice(Math.max(0, idx - 260), idx).map(r => r.price) });
   coachSay(`This session is <b>calibrated to ${d.date}</b>: the chain is tuned so net dealer gamma matches SqueezeMetrics' real reading (${fmtBn(d.gex)}), and volatility matches the realized vol of the prior month (${(rv*100).toFixed(0)}% annualized). The intraday path is simulated — the regime is real.`, 'info');
 }
-document.querySelector('nav button[data-tab="live"]').addEventListener('click', () => loadDix());
+{ const _lb = document.querySelector('nav button[data-tab="live"]'); if (_lb) _lb.addEventListener('click', () => loadDix()); }
 
 /* ---------- boot ---------- */
 document.addEventListener('DOMContentLoaded', () => { /* stay on Learn tab */ });
