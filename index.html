@@ -438,6 +438,7 @@ kbd{background:var(--surface3);border:1px solid var(--border);border-radius:5px;
       <button class="primary" id="uwRunBtn">Run backfill</button>
       <button id="uwStopBtn" disabled>Stop</button>
       <button id="uwSaveBtn" disabled>💾 Save data file</button>
+      <button id="uwClearBtn">🗑 Clear all data</button>
       <label for="uwLoadInp" style="cursor:pointer" class="small ink2"><u>Load a saved data file…</u></label>
       <input type="file" id="uwLoadInp" accept=".json" style="display:none">
     </div>
@@ -2350,6 +2351,9 @@ async function runBackfill(){
         const day = T.days[date] = T.days[date] || {};
         const f = scaleByDate[date] || 1;
         const daysFromEnd = tradingDays.length - 1 - di;   // 0 = most recent
+        // upgrade path: if we previously stored coarse 5m/15m bars for a day that's
+        // inside the 1-minute window, drop them and re-fetch at full resolution
+        if (day.candles && day.tf && daysFromEnd < 30){ delete day.candles; delete day.tf; }
         if (!day.candles){
           let got = false;
           const sizes = daysFromEnd < 30 ? ['1m', '5m', '15m'] : ['5m', '15m', '1m'];
@@ -2422,6 +2426,12 @@ async function runBackfill(){
 }
 $('uwRunBtn').addEventListener('click', runBackfill);
 $('uwStopBtn').addEventListener('click', () => { uwAbort = true; });
+$('uwClearBtn').addEventListener('click', () => {
+  UWDATA = { tickers: {} };
+  $('uwSaveBtn').disabled = true; $('uwPushBtn').disabled = true;
+  refreshReplayPicker();
+  uwLog('🗑 All in-memory data cleared — next backfill starts completely fresh. (Saved files on disk and Supabase rows are untouched.)');
+});
 
 /* ---------- save / load ---------- */
 $('uwSaveBtn').addEventListener('click', () => {
