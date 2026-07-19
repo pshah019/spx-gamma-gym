@@ -268,7 +268,7 @@ kbd{background:var(--surface3);border:1px solid var(--border);border-radius:5px;
           <button id="chartModeBtn" style="padding:2px 10px;font-size:.75rem">🕯 Candles</button>
           <button id="gexModeBtn" style="padding:2px 10px;font-size:.75rem" title="Toggle the GEX pane between UW-style net-per-strike and call/put split">C|P split</button>
           <button id="ladderModeBtn" style="padding:2px 10px;font-size:.75rem" title="Replay days only: live = ladder repriced each minute (anchored to the recorded net GEX), snapshot = the raw morning ladder">⏱ live ladder</button>
-          <button id="unitModeBtn" style="padding:2px 10px;font-size:.75rem" title="Ladder label units: dollars of hedging pressure per 1%, or UW-style contract-gamma numbers (like their site's ladder)"># cons</button>
+          <button id="unitModeBtn" style="padding:2px 10px;font-size:.75rem" title="Ladder label units — click to switch. cons = UW-style contract-gamma numbers (default, like their site's ladder); $ = dollars of hedging pressure per 1%">units: cons</button>
           <span class="mut small">tf</span>
           <button class="tfBtn" data-tf="1" style="padding:2px 7px;font-size:.72rem;outline:2px solid var(--blue)">1m</button>
           <button class="tfBtn" data-tf="3" style="padding:2px 7px;font-size:.72rem">3m</button>
@@ -1137,15 +1137,16 @@ $('gexModeBtn').addEventListener('click', () => {
   if (typeof LIVEOUT !== 'undefined' && LIVEOUT) drawLiveProfile(LIVEOUT);
 });
 let ladderMode = 'live';
+let hoverK = null;   // strike under the cursor in the GEX pane
 $('ladderModeBtn').addEventListener('click', () => {
   ladderMode = ladderMode === 'live' ? 'snap' : 'live';
   $('ladderModeBtn').textContent = ladderMode === 'live' ? '⏱ live ladder' : '📷 9:30 snapshot';
   if (DAY) drawPrice();
 });
-let unitMode = 'usd';
+let unitMode = 'cons';   // UW-style contract numbers by default; falls back to $ if the data has no unit column
 $('unitModeBtn').addEventListener('click', () => {
   unitMode = unitMode === 'usd' ? 'cons' : 'usd';
-  $('unitModeBtn').textContent = unitMode === 'usd' ? '# cons' : '$ usd';
+  $('unitModeBtn').textContent = unitMode === 'cons' ? 'units: cons' : 'units: $';
   if (DAY) drawPrice();
 });
 /* per-strike $→UW-units conversion factor (from the morning ladder's dual columns) */
@@ -1820,6 +1821,17 @@ function drawPrice(){
       if (r.net >= 0){ ctx.fillStyle = COL.green; ctx.fillRect(cx+1, y-rowH/2, len, rowH); }
       else { ctx.fillStyle = COL.red; ctx.fillRect(cx-1-len, y-rowH/2, len, rowH); }
     }
+    // highlight the exact row the tooltip refers to
+    if (hoverK != null){
+      const hr = withNet.find(r => r.k === hoverK);
+      if (hr){
+        const y = Y(hr.k);
+        ctx.fillStyle = 'rgba(255,255,255,0.09)';
+        ctx.fillRect(sx + 1, y - rowH/2 - 2, stripW - 2, rowH + 4);
+        ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 1;
+        ctx.strokeRect(sx + 1.5, y - rowH/2 - 2, stripW - 3, rowH + 4);
+      }
+    }
     // $ labels: biggest strikes on EACH side get their number
     const pos = withNet.filter(r => r.net > 0).sort((a,b) => b.net - a.net).slice(0, 4);
     const neg = withNet.filter(r => r.net < 0).sort((a,b) => a.net - b.net).slice(0, 4);
@@ -1855,6 +1867,8 @@ function drawPrice(){
   ctx.beginPath(); ctx.moveTo(sx, Y(DAY.S[i])); ctx.lineTo(W, Y(DAY.S[i])); ctx.stroke(); ctx.setLineDash([]);
   // store transforms for hover
   cv._xform = { X, Y, plotW, ylo, yhi, i, stripW };
+  cv._rowH = rowH;
+  if (!cv._stripRows || gexMode !== 'net') cv._stripRows = prof.map(r => ({ y: Y(r.k), k: r.k, net: r.cGex + r.pGex }));
 }
 function niceStep(raw){
   const mag = Math.pow(10, Math.floor(Math.log10(raw)));
@@ -1868,24 +1882,30 @@ $('priceCanvas').addEventListener('mousemove', e => {
   const { X, plotW, i } = cv._xform;
   const mx = e.clientX - r.left, myy = e.clientY - r.top;
   if (mx > r.width - cv._xform.stripW && cv._stripRows){
-    let best = null, bd = 9;
-    for (const row of cv._stripRows){ const d = Math.abs(row.y - myy); if (d < bd){ bd = d; best = row; } }
     const tip = $('chartTip');
-    if (!best){ tip.style.display = 'none'; return; }
+    let best = null, bd = (cv._rowH || 8)/2 + 3;   // only the row actually under the cursor
+    for (const row of cv._stripRows){ const d = Math.abs(row.y - myy); if (d < bd){ bd = d; best = row; } }
+    if (!best){
+      tip.style.display = 'none';
+      if (hoverK != null){ hoverK = null; drawPrice(); }
+      return;
+    }
+    if (hoverK !== best.k){ hoverK = best.k; drawPrice(); }   // highlight the exact bar
     const h = stripHist();
-    const hv = m => m.has(best.k) ? fmtStripVal(best.k, m.get(best.k)) : '—';
+    const hv = (m, mins) => DAY.i < mins ? '—' : (m.has(best.k) ? fmtStripVal(best.k, m.get(best.k)) : '—');
     let pcLine = '';
     if (DAY.dailyCloses && DAY.dailyCloses.length){
       const pc = DAY.dailyCloses[DAY.dailyCloses.length-1];
       pcLine = `<br><span class="mut">${(((best.k - pc)/pc)*100).toFixed(2)}% from prev close</span>`;
     }
     tip.style.display = 'block';
-    tip.style.left = Math.min(mx - 190, r.width - 200) + 'px';
-    tip.style.top = (myy + 12) + 'px';
+    tip.style.left = (r.width - cv._xform.stripW - 205) + 'px';
+    tip.style.top = Math.max(4, best.y - 30) + 'px';   // pinned beside the highlighted row
     tip.innerHTML = `<b>${best.k}</b><br>Gamma Exposure <b class="${best.net >= 0 ? 'up' : 'dn'}">${fmtStripVal(best.k, best.net)}</b>` +
-      `<br><span class="mut">10 min ago</span> ${hv(h.p10)}<br><span class="mut">20 min ago</span> ${hv(h.p20)}<br><span class="mut">30 min ago</span> ${hv(h.p30)}` + pcLine;
+      `<br><span class="mut">10 min ago</span> ${hv(h.p10, 10)}<br><span class="mut">20 min ago</span> ${hv(h.p20, 20)}<br><span class="mut">30 min ago</span> ${hv(h.p30, 30)}` + pcLine;
     return;
   }
+  if (hoverK != null){ hoverK = null; drawPrice(); }
   if (mx > plotW){ $('chartTip').style.display = 'none'; return; }
   const m = Math.max(0, Math.min(i, Math.round(mx/plotW*389)));
   const lv = curLevels(m);
@@ -1897,7 +1917,7 @@ $('priceCanvas').addEventListener('mousemove', e => {
     `net GEX (map) <b class="${lv.net>0?'up':'dn'}">${fmtBn(lv.net)}</b><br>` +
     `<span class="mut">flip ${lv.flip?fmtPx(lv.flip):'—'} · CW ${lv.callWall} · PW ${lv.putWall}</span>`;
 });
-$('priceCanvas').addEventListener('mouseleave', () => $('chartTip').style.display = 'none');
+$('priceCanvas').addEventListener('mouseleave', () => { $('chartTip').style.display = 'none'; if (hoverK != null){ hoverK = null; if (DAY) drawPrice(); } });
 
 function drawGexCurve(){
   const cv = $('gexCurveCanvas');
