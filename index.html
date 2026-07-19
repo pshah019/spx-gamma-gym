@@ -1198,15 +1198,16 @@ function stripProfile(minute){
         const w = (g0 > 0 && isFinite(g1)) ? Math.min(6, g1/g0) : 1;
         return { ...r, cGex: r.cGex*w, pGex: r.pGex*w };
       });
-      // anchor the total to the recorded per-minute net GEX (real, signed)
+      // scale MAGNITUDE to the recorded per-minute net GEX — never the signs.
+      // UW's own intraday ladder stays mixed green/red even on deep-negative
+      // days; per-strike sign must come from the real ladder only.
       const rec = DAY.realNet ? DAY.realNet[minute] : null;
       if (rec != null && isFinite(rec)){
-        let C = 0, P = 0;
-        for (const r of base){ C += r.cGex; P += r.pGex; }
-        const span = C - P;                    // C ≥ 0, P ≤ 0 → span ≥ 0
-        if (span > 0){
-          const d = Math.max(-0.75, Math.min(0.75, (rec - (C + P))/span));   // keep >=25% of each side so real walls stay visible
-          base = base.map(r => ({ ...r, cGex: r.cGex*(1 + d), pGex: r.pGex*(1 - d) }));
+        let net = 0;
+        for (const r of base) net += r.cGex + r.pGex;
+        if (net !== 0){
+          const f = Math.min(5, Math.max(0.2, Math.abs(rec/net)));
+          base = base.map(r => ({ ...r, cGex: r.cGex*f, pGex: r.pGex*f }));
         }
       }
     }
@@ -2900,26 +2901,35 @@ function startReplayDay(t, date){
   const smap = D.spot ? new Map(D.spot.map(r => [r[0], r])) : null;
   const cRows = D.candles ? D.candles.map(r => [...r]) : null;
   if (cRows && smap){
-    const diffs = [];
-    for (const r of cRows){
+    // PER-BAR calibration onto the recorded SPX path: for every bar, take the
+    // rolling median (±5 bars) of recorded-spot-minus-close and add it. This
+    // follows the true SPX level minute by minute (the recorded path is 5-pt
+    // quantized, the rolling median smooths that noise to ~±1 pt) instead of
+    // one crude whole-day offset.
+    const rawOff = cRows.map(r => {
       const sp = smap.get(r[0]) || smap.get(r[0]+1) || smap.get(r[0]+2);
-      if (sp) diffs.push(sp[1] - r[4]);
+      return sp ? sp[1] - r[4] : null;
+    });
+    const offAt = i => {
+      const w = [];
+      for (let k = Math.max(0, i-5); k <= Math.min(cRows.length-1, i+5); k++)
+        if (rawOff[k] != null) w.push(rawOff[k]);
+      if (!w.length) return 0;
+      w.sort((a,b) => a-b);
+      return w[Math.floor(w.length/2)];
+    };
+    for (let i = 0; i < cRows.length; i++){
+      const off = offAt(i);
+      if (isFinite(off) && off !== 0){ const r = cRows[i]; r[1] += off; r[2] += off; r[3] += off; r[4] += off; }
     }
-    if (diffs.length > 5){
-      diffs.sort((a,b) => a-b);
-      const off = diffs[Math.floor(diffs.length/2)];
-      if (isFinite(off) && Math.abs(off) > 0.25)
-        for (const r of cRows){ r[1] += off; r[2] += off; r[3] += off; r[4] += off; }
-    }
-    // drop corrupt bars (close-auction glitches, bad prints): anything whose
-    // close strays >0.35% from the recorded path or whose range is absurd vs
-    // the day's median — those minutes fall back to the recorded spot path
+    // drop corrupt bars (close-auction glitches, bad prints): after per-bar
+    // calibration a close should sit within a few points of the recorded path
     const rngs = cRows.map(r => r[2] - r[3]).sort((a,b) => a-b);
     const medR = rngs[Math.floor(rngs.length/2)] || 1;
     for (let ri = cRows.length - 1; ri >= 0; ri--){
       const r = cRows[ri];
       const sp = smap.get(r[0]) || smap.get(r[0]+1) || smap.get(r[0]+2);
-      const devBad = sp && Math.abs(r[4] - sp[1]) > Math.max(20, sp[1]*0.0035);
+      const devBad = sp && Math.abs(r[4] - sp[1]) > Math.max(12, sp[1]*0.0015);
       const rngBad = (r[2] - r[3]) > Math.max(25, 8*medR);
       if (devBad || rngBad) cRows.splice(ri, 1);
     }
