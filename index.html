@@ -1033,20 +1033,28 @@ let REALSPOT = null;   // latest real SPX close — anchors synthetic days to re
     } catch (e){}
   }
 })();
-function newDay(){
+async function newDay(){
   const type = $('scenarioSel').value;
   if (type === 'realRandom'){
-    // random replayable DAY of the ticker YOU chose — real data or nothing
+    // random replayable DAY of the ticker YOU chose — memory first, then Supabase, never fake
     const t = $('simTickerSel').value;
-    const days = (UWDATA.tickers[t] || {}).days || {};
-    const pool = Object.keys(days).filter(d => days[d].ladder && (days[d].candles || days[d].spot))
-      .map(d => [d, days[d].spot ? 1 : 0]);
+    const poolOf = () => {
+      const days = (UWDATA.tickers[t] || {}).days || {};
+      return Object.keys(days).filter(d => days[d].ladder && (days[d].candles || days[d].spot))
+        .map(d => [d, days[d].spot ? 1 : 0]);
+    };
+    let pool = poolOf();
+    if (!pool.length){
+      // try Supabase automatically (anon key remembered across visits)
+      $('srcBadge').textContent = '⏳ loading real data…'; $('srcBadge').className = 'badge zero';
+      try { await supaLoadAll(); } catch (e){}
+      pool = poolOf();
+    }
     if (!pool.length){
       switchTab('data');
-      uwLog(`⚠ No real ${t} data in memory. Run a backfill with ${t} ticked (or load your saved uw_gex_data.json), then use "Random REAL day" on the Practice Sim tab.`);
+      uwLog(`⚠ No real ${t} data in memory or Supabase. Run a backfill with ${t} ticked and "Push to Supabase" once — after that, Random REAL day works directly from the Practice Sim tab.`);
       return;
     }
-    // prefer days with the recorded per-minute series when available
     const rich = pool.filter(p => p[1]);
     const src = rich.length ? rich : pool;
     startReplayDay(t, src[Math.floor(Math.random()*src.length)][0]);
@@ -1651,6 +1659,22 @@ function drawPrice(){
       }
     }
     ctx.stroke();
+  }
+  // ---- DAILY SMA levels (real prior closes: "the 50-day", "the 200-day") ----
+  if (DAY.dailyCloses && DAY.dailyCloses.length){
+    ctx.font = 'bold 9px system-ui'; ctx.textAlign = 'left';
+    for (const n of [10, 20, 50, 200]){
+      if (!smaOn[n] || DAY.dailyCloses.length < n) continue;
+      let sum = 0;
+      for (let j = DAY.dailyCloses.length - n; j < DAY.dailyCloses.length; j++) sum += DAY.dailyCloses[j];
+      const lvl = sum/n;
+      if (lvl < ylo || lvl > yhi) continue;
+      ctx.strokeStyle = SMACOL[n]; ctx.lineWidth = 1; ctx.setLineDash([8, 5]);
+      ctx.beginPath(); ctx.moveTo(0, Y(lvl)); ctx.lineTo(plotW, Y(lvl)); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = SMACOL[n];
+      ctx.fillText(n + 'd SMA ' + fmtPx(lvl), 6, Y(lvl) - 4);
+    }
   }
   // ---- RSI sub-pane ----
   if (rsiOn){
@@ -2282,7 +2306,8 @@ function practiceHistDay(idx){
   sc.ivPath = path.iv;
   startDay({ sc, S: path.S, iv: path.iv, gTrue: path.gArr,
     title: 'Calibrated to ' + d.date + ' (real net GEX ' + fmtBn(d.gex) + ', rv ' + (rv*100).toFixed(0) + '%)',
-    isCase: false, caseObj: null });
+    isCase: false, caseObj: null,
+    dailyCloses: HISTROWS.slice(Math.max(0, idx - 260), idx).map(r => r.price) });
   coachSay(`This session is <b>calibrated to ${d.date}</b>: the chain is tuned so net dealer gamma matches SqueezeMetrics' real reading (${fmtBn(d.gex)}), and volatility matches the realized vol of the prior month (${(rv*100).toFixed(0)}% annualized). The intraday path is simulated — the regime is real.`, 'info');
 }
 document.querySelector('nav button[data-tab="live"]').addEventListener('click', () => loadDix());
@@ -2509,8 +2534,8 @@ $('uwPushBtn').addEventListener('click', async () => {
   let n = 0, failed = 0;
   for (const t of Object.keys(UWDATA.tickers)){
     const days = UWDATA.tickers[t].days || {};
-    const rows = Object.keys(days).filter(d => days[d].candles || days[d].ladder)
-      .map(d => ({ ticker: t, day: d, candles: days[d].candles || null, ladder: days[d].ladder || null }));
+    const rows = Object.keys(days).filter(d => days[d].candles || days[d].ladder || days[d].spot)
+      .map(d => ({ ticker: t, day: d, candles: days[d].candles || null, ladder: days[d].ladder || null, spot: days[d].spot || null }));
     for (let i = 0; i < rows.length; i += 20){
       try {
         const r = await fetch(SUPA_URL + '/rest/v1/uw_days?on_conflict=ticker,day', {
@@ -2523,22 +2548,28 @@ $('uwPushBtn').addEventListener('click', async () => {
   }
   st.textContent = `done — ${n} ticker-days in Supabase ✓`;
 });
+/* the anon key is public-by-design; remember it so real-data mode works on any visit */
+try { const k = localStorage.getItem('supaAnonKey'); if (k && !$('supaKey').value) $('supaKey').value = k; } catch (e){}
+$('supaKey').addEventListener('change', () => { try { localStorage.setItem('supaAnonKey', $('supaKey').value.trim()); } catch (e){} });
+
+async function supaLoadAll(){
+  const key = $('supaKey').value.trim();
+  if (!key) throw new Error('no anon key');
+  const r = await fetch(SUPA_URL + '/rest/v1/uw_days?select=ticker,day,candles,ladder,spot&order=day.asc&limit=5000', { headers: await supaHeaders() });
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  const rows = await r.json();
+  for (const row of rows){
+    const T = UWDATA.tickers[row.ticker] = UWDATA.tickers[row.ticker] || { daily: [], days: {} };
+    T.days[row.day] = { candles: row.candles, ladder: row.ladder, spot: row.spot || undefined };
+  }
+  if (rows.length){ $('uwSaveBtn').disabled = false; refreshReplayPicker(); }
+  return rows.length;
+}
 $('uwPullBtn').addEventListener('click', async () => {
   const st = $('supaStatus');
-  if (!$('supaKey').value.trim()){ st.textContent = 'paste your anon key first'; return; }
   st.textContent = 'loading…';
-  try {
-    const r = await fetch(SUPA_URL + '/rest/v1/uw_days?select=ticker,day,candles,ladder&order=day.asc&limit=5000', { headers: await supaHeaders() });
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    const rows = await r.json();
-    for (const row of rows){
-      const T = UWDATA.tickers[row.ticker] = UWDATA.tickers[row.ticker] || { daily: [], days: {} };
-      T.days[row.day] = { candles: row.candles, ladder: row.ladder };
-    }
-    st.textContent = `loaded ${rows.length} ticker-days ✓`;
-    $('uwSaveBtn').disabled = false;
-    refreshReplayPicker();
-  } catch (e){ st.textContent = 'error: ' + e.message; }
+  try { st.textContent = `loaded ${await supaLoadAll()} ticker-days ✓`; }
+  catch (e){ st.textContent = e.message === 'no anon key' ? 'paste your anon key first' : 'error: ' + e.message; }
 });
 
 /* ---------- replay ---------- */
@@ -2612,8 +2643,10 @@ function startReplayDay(t, date){
   const sc = { type: 'replay', name: 'Replay ' + t + ' ' + date, hint: '', chain, spot0: S[0],
     ivOpen: iv, ivClose: ivArr[389], ivPath: ivArr, rvMult: 1, eventMin: null, eventBias: 0 };
   const hasSpot = !!D.spot;
+  // real daily closes BEFORE this day → true daily SMA levels (the "50-day", "200-day")
+  const dailyCloses = (UWDATA.tickers[t].daily || []).filter(r => r.date < date).map(r => r.c);
   startDay({ sc, S, iv: ivArr, gTrue: null, title: 'REPLAY ' + t + ' ' + date + (hasSpot ? ' (recorded price + net GEX)' : ' (real candles + real ladder)'),
-    isCase: false, caseObj: null, candles, isReplay: true, realNet: hasSpot ? realNet : null });
+    isCase: false, caseObj: null, candles, isReplay: true, realNet: hasSpot ? realNet : null, dailyCloses });
   coachSay(`<b>Real-day replay: ${t} ${date}.</b> ${hasSpot ?
     'Price is UW’s recorded per-minute series and the headline net GEX each minute is their actual recorded value — the per-strike pane is the real morning ladder repriced as spot moves.' :
     'Candles are the actual tape; the gamma ladder is UW’s real morning positioning, repriced as spot moves.'} Premiums are Black-Scholes at ~${(iv*100).toFixed(0)}% IV (estimated from that month's realized vol) — realistic, not exchange quotes.`, 'info');
