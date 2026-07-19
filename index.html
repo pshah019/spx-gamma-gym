@@ -1050,8 +1050,12 @@ async function newDay(){
     // random replayable DAY of the ticker YOU chose — memory first, then Supabase, never fake
     const t = $('simTickerSel').value;
     const poolOf = () => {
+      // ● full-quality days ONLY: real per-strike ladder AND UW's recorded
+      // 1-minute spot/net-GEX series. Reconstructed ◐ days are excluded from
+      // "New day" — pick those manually in Data & Replay if you want one.
       const s = replayableSets(t);
-      return [...s.full, ...s.recon];   // all real days: recorded + reconstructed
+      const days = (UWDATA.tickers[t] || {}).days || {};
+      return [...s.full].filter(d => days[d] && days[d].spot);
     };
     let pool = poolOf();
     if (!pool.length){
@@ -1062,7 +1066,7 @@ async function newDay(){
     }
     if (!pool.length){
       switchTab('data');
-      uwLog(`⚠ No real ${t} data in memory or Supabase. Run a backfill with ${t} ticked and "Push to Supabase" once — after that, Random REAL day works directly from the Practice Sim tab.`);
+      uwLog(`⚠ No fully-recorded ${t} days (1-min data) in memory or Supabase. Run a backfill with ${t} ticked and "Push to Supabase" — UW keeps 1-min history only ~30 trading days back, so recent days will qualify. Older ◐ reconstructed days can still be replayed manually from the picker below.`);
       return;
     }
     startReplayDay(t, pool[Math.floor(Math.random()*pool.length)]);
