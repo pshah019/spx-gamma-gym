@@ -140,6 +140,7 @@ kbd{background:var(--surface3);border:1px solid var(--border);border-radius:5px;
     <button data-tab="sim">Practice Sim</button>
     <button data-tab="cases">Case Studies</button>
     <button data-tab="live">Live GEX</button>
+    <button data-tab="data">Data &amp; Replay</button>
   </nav>
   <div id="modeBadge">paper-trading trainer · not investment advice</div>
 </div>
@@ -260,6 +261,16 @@ kbd{background:var(--surface3);border:1px solid var(--border);border-radius:5px;
         <div class="lvlLegend">
           <button id="chartModeBtn" style="padding:2px 10px;font-size:.75rem">🕯 Candles</button>
           <button id="gexModeBtn" style="padding:2px 10px;font-size:.75rem" title="Toggle the GEX pane between UW-style net-per-strike and call/put split">C|P split</button>
+          <span class="mut small">tf</span>
+          <button class="tfBtn" data-tf="1" style="padding:2px 7px;font-size:.72rem;outline:2px solid var(--blue)">1m</button>
+          <button class="tfBtn" data-tf="3" style="padding:2px 7px;font-size:.72rem">3m</button>
+          <button class="tfBtn" data-tf="5" style="padding:2px 7px;font-size:.72rem">5m</button>
+          <button class="tfBtn" data-tf="15" style="padding:2px 7px;font-size:.72rem">15m</button>
+          <button class="indBtn" data-ind="10" style="padding:2px 7px;font-size:.72rem;color:#e0a63d">S10</button>
+          <button class="indBtn" data-ind="20" style="padding:2px 7px;font-size:.72rem;color:#9085e9">S20</button>
+          <button class="indBtn" data-ind="50" style="padding:2px 7px;font-size:.72rem;color:#199e70">S50</button>
+          <button class="indBtn" data-ind="200" style="padding:2px 7px;font-size:.72rem;color:#e66767">S200</button>
+          <button id="rsiBtn" style="padding:2px 7px;font-size:.72rem">RSI</button>
           <span><span class="k" style="border-color:#3987e5"></span>SPX</span>
           <span><span class="k" style="border-color:#0ca30c"></span>Call wall</span>
           <span><span class="k" style="border-color:#e66767"></span>Put wall</span>
@@ -294,6 +305,7 @@ kbd{background:var(--surface3);border:1px solid var(--border);border-radius:5px;
         <div class="statrow">
           <div class="stat"><div class="lab">Call wall</div><div class="val num up" id="cwLbl">—</div></div>
           <div class="stat"><div class="lab">Put wall</div><div class="val num dn" id="pwLbl">—</div></div>
+          <div class="stat"><div class="lab">Magnet</div><div class="val num" style="color:var(--violet)" id="magLbl">—</div></div>
         </div>
         <canvas id="gexCurveCanvas" height="110"></canvas>
         <div class="small mut" style="margin-top:4px">Net GEX vs. hypothetical spot — where the curve crosses zero is the flip. <span class="q" data-tip="This curve re-prices every option's gamma at each hypothetical SPX level. As spot moves along it you can watch the regime change coming before it happens.">?</span></div>
@@ -403,6 +415,56 @@ kbd{background:var(--surface3);border:1px solid var(--border);border-radius:5px;
   </div>
 </section>
 </main>
+
+<!-- ================= DATA & REPLAY ================= -->
+<section class="tabpane" id="tab-data">
+  <h2 style="margin:6px 0 4px">Real-data backfill &amp; replay</h2>
+  <p class="ink2" style="max-width:880px;line-height:1.55;font-size:.9rem">Pull <b>real per-strike gamma ladders and 1-minute price candles</b> for SPX and the MAG7 from your Unusual Whales API subscription (90-day lookback on Basic). Everything runs in <b>your browser only</b> — your key is never stored, never sent anywhere except UW. Then replay any captured day: real candles, real walls, real flip, and trade it with 0DTE options.</p>
+  <div class="card" style="max-width:880px">
+    <h3>Step 1 — backfill from UW</h3>
+    <div class="rowflex" style="align-items:center">
+      <input type="password" id="uwKey" placeholder="UW API key (kept in memory only)" style="min-width:290px">
+      <label class="small ink2"><input type="checkbox" class="uwTick" value="SPX" checked> SPX</label>
+      <label class="small ink2"><input type="checkbox" class="uwTick" value="AAPL"> AAPL</label>
+      <label class="small ink2"><input type="checkbox" class="uwTick" value="MSFT"> MSFT</label>
+      <label class="small ink2"><input type="checkbox" class="uwTick" value="GOOGL"> GOOGL</label>
+      <label class="small ink2"><input type="checkbox" class="uwTick" value="AMZN"> AMZN</label>
+      <label class="small ink2"><input type="checkbox" class="uwTick" value="NVDA"> NVDA</label>
+      <label class="small ink2"><input type="checkbox" class="uwTick" value="META"> META</label>
+      <label class="small ink2"><input type="checkbox" class="uwTick" value="TSLA"> TSLA</label>
+    </div>
+    <div class="rowflex" style="margin-top:8px;align-items:center">
+      <label class="small ink2">Days back: <input type="number" id="uwDays" value="90" min="5" max="500" style="width:64px"></label>
+      <button class="primary" id="uwRunBtn">Run backfill</button>
+      <button id="uwStopBtn" disabled>Stop</button>
+      <button id="uwSaveBtn" disabled>💾 Save data file</button>
+      <label for="uwLoadInp" style="cursor:pointer" class="small ink2"><u>Load a saved data file…</u></label>
+      <input type="file" id="uwLoadInp" accept=".json" style="display:none">
+    </div>
+    <div id="uwProg" class="small mut" style="margin-top:8px;font-family:ui-monospace,monospace;max-height:150px;overflow-y:auto;line-height:1.5"></div>
+    <div class="disclose">UW data is licensed for personal use — keep the data file in your project folder or Supabase, NOT in the public GitHub repo. After backfilling, regenerate your API key on the UW dashboard if it was ever shared anywhere.</div>
+  </div>
+  <div class="card" style="max-width:880px" id="uwSupaCard">
+    <h3>Step 2 (optional) — mirror to Supabase</h3>
+    <p class="small ink2" style="line-height:1.55">Run the updated <code>supabase_setup.sql</code> in your Supabase SQL editor first (creates the <code>uw_days</code> table), then paste your project's <b>anon public</b> key (Settings → API keys). Never paste the service_role key anywhere.</p>
+    <div class="rowflex" style="align-items:center">
+      <input type="password" id="supaKey" placeholder="Supabase anon public key" style="min-width:290px">
+      <button id="uwPushBtn" disabled>Push to Supabase</button>
+      <button id="uwPullBtn">Load from Supabase</button>
+      <span class="small mut" id="supaStatus"></span>
+    </div>
+  </div>
+  <div class="card" id="replayCard" style="display:none">
+    <h3>Step 3 — replay a real day</h3>
+    <div class="rowflex" style="align-items:center">
+      <select id="rpTicker"></select>
+      <select id="rpDate"></select>
+      <button class="primary" id="rpStartBtn">Replay this day →</button>
+      <span class="small mut" id="rpInfo"></span>
+    </div>
+    <div class="disclose">Replay uses the day's real 1-minute candles and the real morning gamma ladder (repriced through the day as spot moves — intraday flow adjustments aren't in the data). Option premiums are Black-Scholes at an IV estimated from that month's realized volatility: realistic, not exchange quotes.</div>
+  </div>
+</section>
 
 <!-- end-of-day modal -->
 <div id="modal"><div id="modalBox"></div></div>
@@ -974,7 +1036,7 @@ function startDay(cfg){
     lvT: buildLevelTimeline(cfg.sc, cfg.S)
   };
   setSpeed(0);
-  $('dayTitle').textContent = (cfg.isCase || (cfg.sc && cfg.sc.type === 'hist')) ? '◆ ' + cfg.title : '';
+  $('dayTitle').textContent = (cfg.isCase || (cfg.sc && (cfg.sc.type === 'hist' || cfg.sc.type === 'replay'))) ? '◆ ' + cfg.title : '';
   $('coachFeed').innerHTML = '';
   $('blotter').querySelector('tbody').innerHTML = '';
   $('noTrades').style.display = '';
@@ -1033,17 +1095,20 @@ function optQuote(cp, K){
   return E.quote(S, K, T, iv, cp === 'C');
 }
 function populateStrikes(){
+  // strikes come from the actual chain (works for SPX and stock-priced tickers alike)
   const S = spot();
-  const atm = Math.round(S/5)*5;
   const sel = $('strikeSel');
   const prev = sel.value;
+  const ks = DAY.sc.chain.strikes.map(r => r.k).sort((a,b) => Math.abs(a-S) - Math.abs(b-S)).slice(0, 25).sort((a,b) => a-b);
   sel.innerHTML = '';
-  for (let k = atm-60; k <= atm+60; k += 5){
+  let atm = ks[0] || Math.round(S);
+  for (const k of ks){
     const o = document.createElement('option');
     o.value = k; o.textContent = k;
     sel.appendChild(o);
+    if (Math.abs(k - S) < Math.abs(atm - S)) atm = k;
   }
-  sel.value = [...sel.options].some(o => o.value === prev) ? prev : atm;
+  sel.value = [...sel.options].some(o => +o.value === +prev) ? prev : atm;
 }
 function refreshTicket(){
   const cp = $('cpSel').value, K = +$('strikeSel').value;
@@ -1370,6 +1435,7 @@ function refreshAll(){
   $('flipLbl').textContent = lv.flip ? fmtPx(lv.flip) : (lv.net < 0 ? 'far overhead ↑' : 'far below ↓');
   $('cwLbl').textContent = lv.callWall ?? '—';
   $('pwLbl').textContent = lv.putWall ?? '—';
+  $('magLbl').textContent = lv.magnet ?? '—';
   $('cashLbl').textContent = fmt$(DAY.cash);
   const pnl = dayPnl();
   const pl = $('pnlLbl'); pl.textContent = fmt$(pnl); pl.className = 'val num ' + (pnl >= 0 ? 'up' : 'dn');
@@ -1418,12 +1484,33 @@ const COL = { blue:'#3987e5', green:'#0ca30c', red:'#e66767', yellow:'#c98500', 
 let yState = { lo: null, hi: null };
 let chartMode = 'line';
 let gexMode = 'net';
+let tfMin = 1;
+let smaOn = { 10: false, 20: false, 50: false, 200: false };
+let rsiOn = false;
+document.querySelectorAll('.tfBtn').forEach(b => b.addEventListener('click', () => {
+  tfMin = +b.dataset.tf;
+  document.querySelectorAll('.tfBtn').forEach(x => x.style.outline = x === b ? '2px solid var(--blue)' : 'none');
+  if (DAY) drawPrice();
+}));
+document.querySelectorAll('.indBtn').forEach(b => b.addEventListener('click', () => {
+  const n = +b.dataset.ind;
+  smaOn[n] = !smaOn[n];
+  b.style.outline = smaOn[n] ? '2px solid var(--border)' : 'none';
+  b.style.background = smaOn[n] ? 'var(--surface3)' : '';
+  if (DAY) drawPrice();
+}));
+$('rsiBtn').addEventListener('click', () => {
+  rsiOn = !rsiOn;
+  $('rsiBtn').style.outline = rsiOn ? '2px solid var(--violet)' : 'none';
+  if (DAY) drawPrice();
+});
 function drawPrice(){
   const cv = $('priceCanvas');
   const { ctx, W, H } = setupCanvas(cv, 430);
   ctx.fillStyle = COL.surface; ctx.fillRect(0,0,W,H);
   const i = DAY.i, lv = lvAt(i);
-  const padB = 24, padT = 10;
+  const rsiH = rsiOn ? 74 : 0;
+  const padB = 24 + rsiH, padT = 10;
   const stripW = 96, labW = 56;
   const plotW = W - stripW - labW - 8;
   // y range: visible path + nearby levels, eased
@@ -1457,7 +1544,7 @@ function drawPrice(){
     ctx.strokeStyle = COL.grid;
     ctx.beginPath(); ctx.moveTo(X(m), padT); ctx.lineTo(X(m), H-padB); ctx.stroke();
     const hh = 9+hr > 12 ? 9+hr-12 : 9+hr;
-    ctx.fillText(hh + (9+hr>=12?'pm':'am'), X(m), H-8);
+    ctx.fillText(hh + (9+hr>=12?'pm':'am'), X(m), H - padB + 14);
   }
   // levels
   function levelLine(p, color, dash, label){
@@ -1474,28 +1561,83 @@ function drawPrice(){
   levelLine(lv.putWall, COL.red, [], 'PW ' + lv.putWall);
   levelLine(lv.flip, COL.yellow, [7,5], 'FLIP ' + (lv.flip?fmtPx(lv.flip):''));
   if (lv.magnet !== lv.callWall && lv.magnet !== lv.putWall) levelLine(lv.magnet, COL.violet, [2,4], 'MAG ' + lv.magnet);
-  // price path: line or 5-minute candles
+  // ---- aggregate candles at the selected timeframe (real OHLC when available) ----
+  const minuteCandle = j => DAY.candles ? DAY.candles[j]
+    : (() => { const o = j ? DAY.S[j-1] : DAY.S[0], c = DAY.S[j];
+        return { o, h: Math.max(o, c), l: Math.min(o, c), c }; })();
+  const tf = tfMin, agg = [];
+  for (let b = 0; b*tf <= i; b++){
+    const s0 = b*tf, s1 = Math.min(s0 + tf - 1, i);
+    const first = minuteCandle(s0);
+    let o = first.o, h = first.h, l = first.l, c = first.c;
+    for (let j = s0+1; j <= s1; j++){ const mc = minuteCandle(j); if (mc.h > h) h = mc.h; if (mc.l < l) l = mc.l; c = mc.c; }
+    agg.push({ s0, s1, o, h, l, c });
+  }
   if (chartMode === 'candles'){
-    const cw5 = Math.max(2, (X(5) - X(0)) * 0.62);
-    for (let b = 0; b*5 <= i; b++){
-      const s0 = b*5, s1 = Math.min(s0+4, i);
-      const openP = s0 === 0 ? DAY.S[0] : DAY.S[s0-1];
-      let hiP = openP, loP = openP;
-      for (let j=s0; j<=s1; j++){ if (DAY.S[j] > hiP) hiP = DAY.S[j]; if (DAY.S[j] < loP) loP = DAY.S[j]; }
-      const closeP = DAY.S[s1];
-      const xc = X(s0 + 2);
-      const up = closeP >= openP;
+    const cwid = Math.max(2, (X(tf) - X(0)) * 0.62);
+    for (const cd of agg){
+      const xc = X(cd.s0 + tf/2);
+      const up = cd.c >= cd.o;
       ctx.strokeStyle = up ? COL.green : COL.red;
       ctx.fillStyle = up ? COL.green : COL.red;
       ctx.lineWidth = 1;
-      ctx.beginPath(); ctx.moveTo(xc, Y(hiP)); ctx.lineTo(xc, Y(loP)); ctx.stroke();
-      const yTop = Y(Math.max(openP, closeP)), yBot = Y(Math.min(openP, closeP));
-      ctx.fillRect(xc - cw5/2, yTop, cw5, Math.max(yBot - yTop, 1));
+      ctx.beginPath(); ctx.moveTo(xc, Y(cd.h)); ctx.lineTo(xc, Y(cd.l)); ctx.stroke();
+      const yTop = Y(Math.max(cd.o, cd.c)), yBot = Y(Math.min(cd.o, cd.c));
+      ctx.fillRect(xc - cwid/2, yTop, cwid, Math.max(yBot - yTop, 1));
     }
   } else {
     ctx.strokeStyle = COL.blue; ctx.lineWidth = 2; ctx.beginPath();
     for (let j=0;j<=i;j++){ const x = X(j), y = Y(DAY.S[j]); j===0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y); }
     ctx.stroke();
+  }
+  // ---- SMA overlays on the aggregated closes ----
+  const closes = agg.map(a => a.c);
+  const SMACOL = { 10: '#e0a63d', 20: '#9085e9', 50: '#199e70', 200: '#e66767' };
+  for (const n of [10, 20, 50, 200]){
+    if (!smaOn[n] || closes.length < n) continue;
+    ctx.strokeStyle = SMACOL[n]; ctx.lineWidth = 1.3; ctx.beginPath();
+    let sum = 0, started = false;
+    for (let b = 0; b < closes.length; b++){
+      sum += closes[b];
+      if (b >= n) sum -= closes[b-n];
+      if (b >= n-1){
+        const x = X(agg[b].s0 + tf/2), y = Y(sum/n);
+        if (!started){ ctx.moveTo(x, y); started = true; } else ctx.lineTo(x, y);
+      }
+    }
+    ctx.stroke();
+  }
+  // ---- RSI sub-pane ----
+  if (rsiOn){
+    const rTop = H - padB + 18, rBot = H - 12;
+    ctx.fillStyle = '#161615'; ctx.fillRect(0, rTop - 4, plotW, rBot - rTop + 10);
+    const RY = v => rBot - (v/100)*(rBot - rTop);
+    ctx.strokeStyle = COL.grid; ctx.setLineDash([3,4]);
+    for (const lvl of [30, 70]){ ctx.beginPath(); ctx.moveTo(0, RY(lvl)); ctx.lineTo(plotW, RY(lvl)); ctx.stroke(); }
+    ctx.setLineDash([]);
+    // Wilder RSI(14) on aggregated closes
+    const per = 14;
+    if (closes.length > per + 1){
+      let g = 0, lo_ = 0;
+      for (let b = 1; b <= per; b++){ const d = closes[b] - closes[b-1]; if (d >= 0) g += d; else lo_ -= d; }
+      let ag = g/per, al = lo_/per;
+      ctx.strokeStyle = COL.violet; ctx.lineWidth = 1.4; ctx.beginPath();
+      let started = false, lastR = 50;
+      for (let b = per + 1; b < closes.length; b++){
+        const d = closes[b] - closes[b-1];
+        ag = (ag*(per-1) + Math.max(d, 0))/per;
+        al = (al*(per-1) + Math.max(-d, 0))/per;
+        lastR = al === 0 ? 100 : 100 - 100/(1 + ag/al);
+        const x = X(agg[b].s0 + tf/2), y = RY(lastR);
+        if (!started){ ctx.moveTo(x, y); started = true; } else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+      ctx.fillStyle = COL.violet; ctx.font = '9px system-ui'; ctx.textAlign = 'left';
+      ctx.fillText('RSI ' + lastR.toFixed(0), 4, rTop + 6);
+    } else {
+      ctx.fillStyle = COL.muted; ctx.font = '9px system-ui'; ctx.textAlign = 'left';
+      ctx.fillText('RSI: needs ' + (per+2) + ' bars at this timeframe', 4, rTop + 6);
+    }
   }
   // current price dot + open ref
   ctx.fillStyle = COL.blue; ctx.beginPath(); ctx.arc(X(i), Y(DAY.S[i]), 3.5, 0, 7); ctx.fill();
@@ -1529,13 +1671,23 @@ function drawPrice(){
     let maxN = 0;
     for (const r of prof) maxN = Math.max(maxN, Math.abs(r.cGex + r.pGex));
     if (!maxN) maxN = 1;
-    for (const r of prof){
+    const withNet = prof.map(r => ({ ...r, net: r.cGex + r.pGex }));
+    for (const r of withNet){
       const y = Y(r.k);
-      const net = r.cGex + r.pGex;
-      const len = Math.max(Math.abs(net)/maxN * (stripW*0.46), (r.cOI + r.pOI) > 0 ? 1 : 0);
+      const len = Math.max(Math.abs(r.net)/maxN * (stripW*0.46), (r.cOI + r.pOI) > 0 ? 1 : 0);
       if (!len) continue;
-      if (net >= 0){ ctx.fillStyle = COL.green; ctx.fillRect(cx+1, y-rowH/2, len, rowH); }
+      if (r.net >= 0){ ctx.fillStyle = COL.green; ctx.fillRect(cx+1, y-rowH/2, len, rowH); }
       else { ctx.fillStyle = COL.red; ctx.fillRect(cx-1-len, y-rowH/2, len, rowH); }
+    }
+    // real $ labels on the biggest strikes
+    const top = [...withNet].sort((a,b) => Math.abs(b.net) - Math.abs(a.net)).slice(0, 4);
+    ctx.font = 'bold 8px system-ui';
+    for (const r of top){
+      if (!Math.abs(r.net)) continue;
+      const y = Y(r.k);
+      const lab = (Math.abs(r.net) >= 0.95e9 ? (Math.abs(r.net)/1e9).toFixed(1) + 'b' : Math.round(Math.abs(r.net)/1e6) + 'm');
+      if (r.net >= 0){ ctx.fillStyle = '#9be89b'; ctx.textAlign = 'left'; ctx.fillText(lab, cx + 3, y - rowH/2 - 2); }
+      else { ctx.fillStyle = '#f3b3b3'; ctx.textAlign = 'right'; ctx.fillText(lab, cx - 3, y - rowH/2 - 2); }
     }
     ctx.fillStyle = COL.muted; ctx.font = '9px system-ui'; ctx.textAlign = 'center';
     ctx.fillText('− net +', cx, H - padB + 14);
@@ -2091,6 +2243,240 @@ document.querySelector('nav button[data-tab="live"]').addEventListener('click', 
 
 /* ---------- boot ---------- */
 document.addEventListener('DOMContentLoaded', () => { /* stay on Learn tab */ });
+
+/* ============================================================
+   UW backfill + real-day replay + Supabase mirror
+   The UW API key lives ONLY in the input field / memory here.
+============================================================ */
+'use strict';
+
+let UWDATA = { tickers: {} };   // tickers[t] = { daily:[{date,o,h,l,c}], days:{date:{candles:[[min,o,h,l,c,v]...], ladder:[[k,cgex,pgex]...]}} }
+let uwAbort = false;
+
+const SUPA_URL = 'https://ihlggfdwbhgechoqvrri.supabase.co';
+
+function uwLog(msg){
+  const d = $('uwProg');
+  d.innerHTML += msg + '<br>';
+  d.scrollTop = d.scrollHeight;
+}
+async function uwFetch(key, path){
+  // try the vercel proxy first (works on the deployed site), then direct (needs UW CORS)
+  const urls = ['/api/uw' + path, 'https://api.unusualwhales.com/api' + path];
+  let lastErr = null;
+  for (const u of urls){
+    try {
+      const r = await fetch(u, { headers: { 'Authorization': 'Bearer ' + key, 'Accept': 'application/json' } });
+      if (r.status === 429){ await new Promise(res => setTimeout(res, 2500)); return uwFetch(key, path); }
+      if (r.status === 401 || r.status === 403) throw new Error('AUTH:' + r.status);
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return await r.json();
+    } catch (e){ lastErr = e; if (String(e.message).startsWith('AUTH')) throw e; }
+  }
+  throw lastErr;
+}
+
+async function runBackfill(){
+  const key = $('uwKey').value.trim();
+  if (!key){ uwLog('⚠ paste your UW API key first'); return; }
+  const tickers = [...document.querySelectorAll('.uwTick:checked')].map(c => c.value);
+  const daysBack = Math.max(5, Math.min(500, +$('uwDays').value || 90));
+  uwAbort = false;
+  $('uwRunBtn').disabled = true; $('uwStopBtn').disabled = false;
+  let reqCount = 0;
+  try {
+    for (const t of tickers){
+      if (uwAbort) break;
+      uwLog(`<b>── ${t} ──</b>`);
+      const T = UWDATA.tickers[t] = UWDATA.tickers[t] || { daily: [], days: {} };
+      // 1) daily candles (also gives us the trading calendar)
+      try {
+        const dj = await uwFetch(key, `/stock/${t}/ohlc/1d?limit=550`); reqCount++;
+        const rows = (dj.data || dj).map(c => ({ date: (c.date || c.start_time || '').slice(0,10), o:+c.open, h:+c.high, l:+c.low, c:+c.close }))
+          .filter(r => r.date).sort((a,b) => a.date < b.date ? -1 : 1);
+        T.daily = rows;
+        uwLog(`daily candles: ${rows.length} days (${rows[0]?.date} → ${rows[rows.length-1]?.date})`);
+      } catch (e){ uwLog(`daily candles failed: ${e.message}`); }
+      const tradingDays = T.daily.slice(-daysBack).map(r => r.date);
+      // 2) per-day: 1-min candles + per-strike gamma ladder
+      let done = 0;
+      for (const date of tradingDays){
+        if (uwAbort) break;
+        const day = T.days[date] = T.days[date] || {};
+        if (!day.candles){
+          try {
+            const cj = await uwFetch(key, `/stock/${t}/ohlc/1m?date=${date}&limit=2500`); reqCount++;
+            const arr = (cj.data || cj).map(c => {
+              const st = c.start_time || c.market_time || '';
+              const dt = new Date(st);
+              const et = new Date(dt.toLocaleString('en-US', { timeZone: 'America/New_York' }));
+              const min = (et.getHours() - 9)*60 + et.getMinutes() - 30;
+              return [min, +c.open, +c.high, +c.low, +c.close, +(c.volume || 0)];
+            }).filter(c => c[0] >= 0 && c[0] < 390 && isFinite(c[4]));
+            if (arr.length > 50) day.candles = arr.sort((a,b) => a[0]-b[0]);
+          } catch (e){ /* skip day */ }
+        }
+        if (!day.ladder){
+          try {
+            const gj = await uwFetch(key, `/stock/${t}/greek-exposure/strike?date=${date}`); reqCount++;
+            const rows = (gj.data || gj).map(r => [
+              +(r.strike ?? r.strike_price),
+              +(r.call_gamma_exposure ?? r.call_gex ?? r.call_gamma ?? 0),
+              +(r.put_gamma_exposure ?? r.put_gex ?? r.put_gamma ?? 0)
+            ]).filter(r => isFinite(r[0]) && r[0] > 0);
+            if (rows.length > 5) day.ladder = rows.sort((a,b) => a[0]-b[0]);
+          } catch (e){ /* skip */ }
+        }
+        done++;
+        if (done % 10 === 0 || done === tradingDays.length)
+          uwLog(`${t}: ${done}/${tradingDays.length} days (candles+ladders) · ${reqCount} requests total`);
+        await new Promise(res => setTimeout(res, 120));   // be polite
+      }
+      const okDays = Object.values(T.days).filter(d => d.candles && d.ladder).length;
+      uwLog(`<b>${t} complete: ${okDays} days with both candles and ladder ✓</b>`);
+    }
+    uwLog(`<b>Backfill finished — ${reqCount} API requests used.</b> Save the data file, then regenerate your UW key.`);
+  } catch (e){
+    uwLog(String(e.message).startsWith('AUTH') ? '⛔ UW rejected the key (401/403). Check the key / plan.' : '⛔ ' + e.message);
+  }
+  $('uwRunBtn').disabled = false; $('uwStopBtn').disabled = true;
+  $('uwSaveBtn').disabled = !Object.keys(UWDATA.tickers).length;
+  $('uwPushBtn').disabled = !Object.keys(UWDATA.tickers).length;
+  refreshReplayPicker();
+}
+$('uwRunBtn').addEventListener('click', runBackfill);
+$('uwStopBtn').addEventListener('click', () => { uwAbort = true; });
+
+/* ---------- save / load ---------- */
+$('uwSaveBtn').addEventListener('click', () => {
+  const blob = new Blob([JSON.stringify(UWDATA)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'uw_gex_data.json';
+  a.click();
+  uwLog('Saved uw_gex_data.json — move it into your project folder. Load it here any time.');
+});
+$('uwLoadInp').addEventListener('change', async e => {
+  const f = e.target.files[0];
+  if (!f) return;
+  try {
+    UWDATA = JSON.parse(await f.text());
+    uwLog(`Loaded ${f.name}: ` + Object.keys(UWDATA.tickers).map(t => t + ' (' + Object.keys(UWDATA.tickers[t].days || {}).length + 'd)').join(', '));
+    $('uwSaveBtn').disabled = false; $('uwPushBtn').disabled = false;
+    refreshReplayPicker();
+  } catch (err){ uwLog('⛔ could not parse file: ' + err.message); }
+});
+
+/* ---------- supabase mirror ---------- */
+async function supaHeaders(){
+  const k = $('supaKey').value.trim();
+  return { 'apikey': k, 'Authorization': 'Bearer ' + k, 'Content-Type': 'application/json', 'Prefer': 'resolution=merge-duplicates' };
+}
+$('uwPushBtn').addEventListener('click', async () => {
+  const st = $('supaStatus');
+  if (!$('supaKey').value.trim()){ st.textContent = 'paste your anon key first'; return; }
+  st.textContent = 'pushing…';
+  let n = 0, failed = 0;
+  for (const t of Object.keys(UWDATA.tickers)){
+    const days = UWDATA.tickers[t].days || {};
+    const rows = Object.keys(days).filter(d => days[d].candles || days[d].ladder)
+      .map(d => ({ ticker: t, day: d, candles: days[d].candles || null, ladder: days[d].ladder || null }));
+    for (let i = 0; i < rows.length; i += 20){
+      try {
+        const r = await fetch(SUPA_URL + '/rest/v1/uw_days?on_conflict=ticker,day', {
+          method: 'POST', headers: await supaHeaders(), body: JSON.stringify(rows.slice(i, i+20)) });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        n += Math.min(20, rows.length - i);
+        st.textContent = `pushed ${n} rows…`;
+      } catch (e){ failed++; st.textContent = 'error: ' + e.message + ' (did you run the SQL?)'; if (failed > 3) return; }
+    }
+  }
+  st.textContent = `done — ${n} ticker-days in Supabase ✓`;
+});
+$('uwPullBtn').addEventListener('click', async () => {
+  const st = $('supaStatus');
+  if (!$('supaKey').value.trim()){ st.textContent = 'paste your anon key first'; return; }
+  st.textContent = 'loading…';
+  try {
+    const r = await fetch(SUPA_URL + '/rest/v1/uw_days?select=ticker,day,candles,ladder&order=day.asc&limit=5000', { headers: await supaHeaders() });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const rows = await r.json();
+    for (const row of rows){
+      const T = UWDATA.tickers[row.ticker] = UWDATA.tickers[row.ticker] || { daily: [], days: {} };
+      T.days[row.day] = { candles: row.candles, ladder: row.ladder };
+    }
+    st.textContent = `loaded ${rows.length} ticker-days ✓`;
+    $('uwSaveBtn').disabled = false;
+    refreshReplayPicker();
+  } catch (e){ st.textContent = 'error: ' + e.message; }
+});
+
+/* ---------- replay ---------- */
+function refreshReplayPicker(){
+  const ts = Object.keys(UWDATA.tickers).filter(t => Object.values(UWDATA.tickers[t].days || {}).some(d => d.candles && d.ladder));
+  $('replayCard').style.display = ts.length ? '' : 'none';
+  if (!ts.length) return;
+  const sel = $('rpTicker');
+  const prev = sel.value;
+  sel.innerHTML = ts.map(t => `<option>${t}</option>`).join('');
+  if (ts.includes(prev)) sel.value = prev;
+  refreshReplayDates();
+}
+function refreshReplayDates(){
+  const t = $('rpTicker').value;
+  const days = UWDATA.tickers[t].days;
+  const dates = Object.keys(days).filter(d => days[d].candles && days[d].ladder).sort().reverse();
+  $('rpDate').innerHTML = dates.map(d => `<option>${d}</option>`).join('');
+  $('rpInfo').textContent = dates.length + ' replayable days';
+}
+$('rpTicker').addEventListener('change', refreshReplayDates);
+
+function estIVfromDaily(t, date){
+  const daily = UWDATA.tickers[t].daily || [];
+  const idx = daily.findIndex(r => r.date === date);
+  if (idx < 22) return 0.16;
+  const rets = [];
+  for (let j = idx - 21; j < idx; j++) rets.push(Math.log(daily[j+1].c/daily[j].c));
+  const mean = rets.reduce((a,b) => a+b, 0)/rets.length;
+  const rv = Math.sqrt(rets.reduce((a,b) => a + (b-mean)*(b-mean), 0)/rets.length)*Math.sqrt(252);
+  return Math.min(1.2, Math.max(0.08, rv*1.15));
+}
+function chainFromLadder(ladder, S0, iv){
+  const strikes = [];
+  for (const [k, cg, pg] of ladder){
+    if (k < S0*0.82 || k > S0*1.18) continue;
+    const ivk = E.smileIV(iv, k, S0, 1.0, 1.0);
+    const g = E.bs(S0, k, E.T0*6.5, ivk, true).gamma;   // ladder includes further expiries → use a longer effective T for inversion
+    const unit = g * 100 * S0 * S0 * 0.01;
+    if (unit <= 0) continue;
+    strikes.push({ k, cOI: Math.max(0, Math.round(Math.abs(cg)/unit)), pOI: Math.max(0, Math.round(Math.abs(pg)/unit)), cSign: 1, pSign: -1 });
+  }
+  return { strikes: strikes.sort((a,b) => a.k - b.k), ivNow: iv, skew: 1.0, curve: 1.0 };
+}
+function startReplay(){
+  const t = $('rpTicker').value, date = $('rpDate').value;
+  const D = UWDATA.tickers[t].days[date];
+  if (!D || !D.candles || !D.ladder) return;
+  // minute close series, gap-filled
+  const S = new Array(390), candles = new Array(390);
+  let last = D.candles[0][1];
+  const cmap = new Map(D.candles.map(c => [c[0], c]));
+  for (let i = 0; i < 390; i++){
+    const c = cmap.get(i);
+    if (c){ S[i] = c[4]; candles[i] = { o: c[1], h: c[2], l: c[3], c: c[4] }; last = c[4]; }
+    else { S[i] = last; candles[i] = { o: last, h: last, l: last, c: last }; }
+  }
+  const iv = estIVfromDaily(t, date);
+  const ivArr = new Array(390);
+  for (let i = 0; i < 390; i++) ivArr[i] = iv - (iv*0.12)*(i/390);
+  const chain = chainFromLadder(D.ladder, S[0], iv);
+  const sc = { type: 'replay', name: 'Replay ' + t + ' ' + date, hint: '', chain, spot0: S[0],
+    ivOpen: iv, ivClose: ivArr[389], ivPath: ivArr, rvMult: 1, eventMin: null, eventBias: 0 };
+  startDay({ sc, S, iv: ivArr, gTrue: null, title: 'REPLAY ' + t + ' ' + date + ' (real candles + real ladder)',
+    isCase: false, caseObj: null, candles, isReplay: true });
+  coachSay(`<b>Real-day replay: ${t} ${date}.</b> Candles are the actual 1-minute tape; the gamma ladder is UW's real morning positioning, repriced as spot moves. Walls, flip and net GEX are real numbers. Premiums are Black-Scholes at ~${(iv*100).toFixed(0)}% IV (estimated from that month's realized vol) — realistic, not exchange quotes.`, 'info');
+}
+$('rpStartBtn').addEventListener('click', startReplay);
 
 </script>
 </body>

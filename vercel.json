@@ -1,5 +1,7 @@
 {
   "rewrites": [
-    { "source": "/api/spx", "destination": "https://cdn.cboe.com/api/global/delayed_quotes/options/_SPX.json" }
+    { "source": "/api/spx", "destination": "https://cdn.cboe.com/api/global/delayed_quotes/options/_SPX.json" },
+    { "source": "/api/dix", "destination": "https://squeezemetrics.com/monitor/static/DIX.csv" },
+    { "source": "/api/uw/:path*", "destination": "https://api.unusualwhales.com/api/:path*" }
   ]
 }
