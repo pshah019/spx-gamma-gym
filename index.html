@@ -371,7 +371,7 @@ kbd{background:var(--surface3);border:1px solid var(--border);border-radius:5px;
 
   <div id="swEmpty" class="card" style="max-width:880px">
     <h3>No swing data loaded yet</h3>
-    <p class="ink2" style="line-height:1.55;font-size:.9rem">This tab practices <b>multi-day swing trading</b> on the S&amp;P&nbsp;100 with real UW data: real daily candles, real 30-minute bars (newest ~30 trading days — UW's server retention), real daily gamma exposure for the whole 90-day window, and real per-strike cons ladders where available. Older days re-play on intraday bars reconstructed from that day's real OHLC (marked ◐).</p>
+    <p class="ink2" style="line-height:1.55;font-size:.9rem">This tab practices <b>multi-day swing trading</b> on the S&amp;P&nbsp;100 with real UW data: the 90-day window's look-back runs on <b>real daily candles</b>, and the newest ~30 trading days (UW's intraday retention) add <b>real 30-minute bars</b>, real per-strike cons ladders, and real daily gamma exposure. Your start day always lands inside the real-intraday region, so play-forward at 30m/1h/4h/1d is entirely real data. Re-run the backfill every week or two and Supabase keeps accumulating real days.</p>
     <p class="ink2" style="line-height:1.55;font-size:.9rem">Get data: <b>Data &amp; Replay → tick "S&amp;P 100 (swing)" → Run backfill</b>, then Push to Supabase — or just click below to load what's already in Supabase.</p>
     <div class="rowflex" style="align-items:center">
       <button class="primary" id="swLoadBtn">Load swing data from Supabase</button>
@@ -3455,9 +3455,18 @@ function swNewSession(){
   const T = SWINGDATA.tickers[t];
   const win = T.daily.slice(-SW_WINDOW);
   const len = win.length;
-  const minStart = Math.min(SW_MINSTART, Math.max(10, len - 12));
-  const maxStart = len - 6;    // always leave a few tradable days of "future"
-  const startIdx = minStart + Math.floor(Math.random()*Math.max(1, maxStart - minStart + 1));
+  // start day is ALWAYS inside the real-30m region (newest ~30 days): everything
+  // you trade forward is real intraday data; older days are daily-bar look-back.
+  const realIdxs = win.map((r, d) => (T.slots[r.date] && T.slots[r.date].length >= 10) ? d : -1)
+    .filter(d => d >= 0 && d <= len - 4);
+  let startIdx;
+  if (realIdxs.length){
+    startIdx = realIdxs[Math.floor(Math.random()*realIdxs.length)];
+  } else {
+    // no real intraday days at all (stale dataset) — fall back to the old rule
+    const minStart = Math.min(SW_MINSTART, Math.max(10, len - 12));
+    startIdx = minStart + Math.floor(Math.random()*Math.max(1, (len - 6) - minStart + 1));
+  }
   startSwing(t, startIdx);
 }
 function startSwing(t, startIdx){
@@ -3491,8 +3500,10 @@ function startSwing(t, startIdx){
   }
   const gexByDate = new Map((T.gexDaily || []).map(r => [r.date, r]));
   const mags = (T.gexDaily || []).map(r => Math.abs(r.net)).sort((a,b) => a-b);
+  let firstReal = realDay.indexOf(true);
+  if (firstReal < 0) firstReal = 0;   // stale dataset: no real region, keep old behavior
   SW = {
-    t, T, win, dates, S, candles, realDay, N,
+    t, T, win, dates, S, candles, realDay, N, firstReal,
     i: startIdx*SW_SLOTS, startIdx,
     cash: SW_CASH, realized: 0, positions: new Map(), trades: [],
     coachFlags: {}, done: false,
@@ -3867,7 +3878,7 @@ function swOpeningBriefing(realCt){
   return `<b>Swing briefing — ${SW.t}.</b> You have <b>${day} trading days of look-back</b> and an unknown number of days ahead (up to ${SW.dates.length - day - 1}). ` +
     `${SW.t} opens at <b>${swFmtPx(S)}</b>. Dealer map: net GEX <b>${n == null ? 'n/a' : swFmtCons(n) + ' cons'}</b>${n != null ? ' — ' + (n >= 0 ? 'positive (stabilizing)' : 'negative (amplifying)') + ' regime' : ''}. ` +
     `${lv.flip ? 'Gamma flip ≈ <b>' + swFmtPx(lv.flip) + '</b>, ' : ''}call wall <b>${lv.callWall ?? '—'}</b>, put wall <b>${lv.putWall ?? '—'}</b>, magnet <b>${lv.magnet ?? '—'}</b>. ` +
-    `Data honesty: ${realCt} of ${SW.dates.length} days have real 30-min bars (●); the rest reconstruct the intraday path from that day's real OHLC (◐). Daily candles, daily GEX${Object.keys(SW.T.ladders || {}).length ? ' and ' + Object.keys(SW.T.ladders).length + ' cons ladders' : ''} are real. ` +
+    `Data honesty: the 1d timeframe shows the whole window on <b>real daily candles</b>; the 30m/1h/4h timeframes only cover the newest ${realCt} days where UW served <b>real 30-minute bars (●)</b> — and your start day is always inside that region, so everything you play forward is real intraday data. Daily GEX${Object.keys(SW.T.ladders || {}).length ? ' and ' + Object.keys(SW.T.ladders).length + ' cons ladders' : ''} are real too. ` +
     `Pick your expiry, buy a call or a put, and press play — I'll check in with you after each full day in the trade.`;
 }
 function swDayCoach(day){
@@ -4058,10 +4069,14 @@ function swAddBlotterRow(rec){
 }
 
 function swAggBars(){
-  // aggregate slots [0..SW.i] into bars of swTf slots, aligned to day boundaries
+  // aggregate slots into bars of swTf slots, aligned to day boundaries.
+  // Sub-daily timeframes only exist where UW served REAL 30-min bars (the newest
+  // ~30 days) — older look-back days are shown on the 1d timeframe only, where
+  // every bar is a real daily candle. So intraday bars are never reconstructions.
   const bars = [];
   let cur = null;
-  for (let i = 0; i <= SW.i; i++){
+  const from = swTf >= 13 ? 0 : SW.firstReal*SW_SLOTS;
+  for (let i = from; i <= SW.i; i++){
     const slot = i % SW_SLOTS;
     const cd = SW.candles[i];
     if (slot % swTf === 0 || slot === 0 || !cur){
