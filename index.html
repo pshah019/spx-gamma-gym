@@ -73,7 +73,7 @@ main{max-width:1420px;margin:0 auto;padding:14px 18px 60px}
 .badge.neg{background:rgba(230,103,103,.14);color:#ef8a8a;border:1px solid rgba(230,103,103,.4)}
 .badge.zero{background:rgba(201,133,0,.14);color:#e0a63d;border:1px solid rgba(201,133,0,.45)}
 #simgrid{display:grid;grid-template-columns:minmax(0,1fr) 330px;gap:12px}
-@media (max-width:1000px){#simgrid{grid-template-columns:1fr}}
+@media (max-width:1000px){#simgrid{grid-template-columns:1fr}#simgrid2{grid-template-columns:1fr !important}}
 #chartwrap{position:relative}
 canvas{display:block;width:100%;border-radius:var(--radius)}
 #priceCanvas{cursor:crosshair}
@@ -138,6 +138,7 @@ kbd{background:var(--surface3);border:1px solid var(--border);border-radius:5px;
   <nav>
     <button data-tab="learn" class="active">Learn</button>
     <button data-tab="sim">Practice Sim</button>
+    <button data-tab="swing">Practice Swing Sim</button>
     <button data-tab="data">Data &amp; Replay</button>
   </nav>
   <div id="modeBadge">paper-trading trainer · not investment advice</div>
@@ -344,6 +345,129 @@ kbd{background:var(--surface3);border:1px solid var(--border);border-radius:5px;
   </div>
 </section>
 
+<!-- ================= SWING SIM ================= -->
+<section class="tabpane" id="tab-swing">
+  <div id="swinghead" style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:10px">
+    <select id="swTickerSel" title="S&P 100 ticker (needs swing backfill data)">
+      <option value="__random" selected>🎲 Random ticker</option>
+    </select>
+    <button class="primary" id="swNewBtn" title="Random start day: the first ~30 days of the 90-day window are always look-back history; the chart starts anywhere after that">New swing</button>
+    <span id="swSrcBadge" class="badge zero" title="Where this day's intraday bars come from">—</span>
+    <span id="swDayTitle" class="small" style="color:var(--yellow);font-weight:700"></span>
+    <span class="clock num" id="swClock" style="font-size:.98rem">—</span>
+    <span class="spot num" id="swSpotLbl" style="font-size:1.35rem;font-weight:750">—</span>
+    <span id="swRegimeBadge" class="badge zero">—</span>
+    <span style="flex:1"></span>
+    <span class="small mut">speed</span>
+    <button id="swPauseBtn">▶</button>
+    <button data-swspeed="1" class="swspd">1×</button>
+    <button data-swspeed="4" class="swspd">4×</button>
+    <button data-swspeed="12" class="swspd">12×</button>
+    <button id="swStepBtn" title="advance one tick at the selected tick size">+1 tick</button>
+    <label class="small ink2" style="display:flex;align-items:center;gap:5px">
+      <input type="checkbox" id="swCoachChk" checked> Coach
+    </label>
+  </div>
+
+  <div id="swEmpty" class="card" style="max-width:880px">
+    <h3>No swing data loaded yet</h3>
+    <p class="ink2" style="line-height:1.55;font-size:.9rem">This tab practices <b>multi-day swing trading</b> on the S&amp;P&nbsp;100 with real UW data: real daily candles, real 30-minute bars (newest ~30 trading days — UW's server retention), real daily gamma exposure for the whole 90-day window, and real per-strike cons ladders where available. Older days re-play on intraday bars reconstructed from that day's real OHLC (marked ◐).</p>
+    <p class="ink2" style="line-height:1.55;font-size:.9rem">Get data: <b>Data &amp; Replay → tick "S&amp;P 100 (swing)" → Run backfill</b>, then Push to Supabase — or just click below to load what's already in Supabase.</p>
+    <div class="rowflex" style="align-items:center">
+      <button class="primary" id="swLoadBtn">Load swing data from Supabase</button>
+      <button id="swGotoData" onclick="switchTab('data')">Open Data &amp; Replay</button>
+      <span class="small mut" id="swLoadStatus"></span>
+    </div>
+  </div>
+
+  <div id="swinggrid" style="display:none">
+  <div id="simgrid2" style="display:grid;grid-template-columns:minmax(0,1fr) 330px;gap:12px">
+    <div>
+      <div class="card" style="padding:10px">
+        <div style="position:relative" id="swChartwrap">
+          <canvas id="swPriceCanvas" height="430" style="cursor:crosshair"></canvas>
+          <div id="swChartTip" style="position:absolute;pointer-events:none;background:#0a0a09;border:1px solid var(--border);border-radius:8px;padding:7px 10px;font-size:.76rem;display:none;z-index:30;line-height:1.5;white-space:nowrap"></div>
+        </div>
+        <div class="lvlLegend">
+          <button id="swChartModeBtn" style="padding:2px 10px;font-size:.75rem">📈 Line</button>
+          <span class="mut small" title="Tick size AND chart timeframe — each play tick advances this much">tick/tf</span>
+          <button class="swTfBtn" data-swtf="1" style="padding:2px 7px;font-size:.72rem">30m</button>
+          <button class="swTfBtn" data-swtf="2" style="padding:2px 7px;font-size:.72rem">1h</button>
+          <button class="swTfBtn" data-swtf="8" style="padding:2px 7px;font-size:.72rem">4h</button>
+          <button class="swTfBtn" data-swtf="13" style="padding:2px 7px;font-size:.72rem;outline:2px solid var(--blue)">1d</button>
+          <button class="swIndBtn" data-swind="10" style="padding:2px 7px;font-size:.72rem;color:#e0a63d">S10</button>
+          <button class="swIndBtn" data-swind="20" style="padding:2px 7px;font-size:.72rem;color:#9085e9">S20</button>
+          <button class="swIndBtn" data-swind="50" style="padding:2px 7px;font-size:.72rem;color:#199e70">S50</button>
+          <button class="swIndBtn" data-swind="200" style="padding:2px 7px;font-size:.72rem;color:#e66767">S200</button>
+          <button id="swRsiBtn" style="padding:2px 7px;font-size:.72rem">RSI</button>
+          <span class="mut" title="Swing ladder labels are always UW contract-style units">units: cons</span>
+          <span><span class="k" style="border-color:#0ca30c"></span>Call wall</span>
+          <span><span class="k" style="border-color:#e66767"></span>Put wall</span>
+          <span><span class="k" style="border-color:#c98500;border-top-style:dotted"></span>Gamma flip</span>
+          <span><span class="k" style="border-color:#9085e9;border-top-style:dotted"></span>Top magnet</span>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Positions <span class="q" data-tip="Marked to the option mid. Swing greeks: Δ = P&L per $1 move in the stock, Θ/day = premium bled per calendar day at current IV.">?</span></h3>
+        <table id="swPosTable"><thead><tr>
+          <th>Contract</th><th>Qty</th><th>Avg</th><th>Mark</th><th>Δ tot</th><th>Θ/day</th><th>P&amp;L</th><th></th>
+        </tr></thead><tbody></tbody></table>
+        <div class="small mut" id="swNoPos">No open positions.</div>
+      </div>
+      <div class="card">
+        <h3>Trade log</h3>
+        <table id="swBlotter"><thead><tr>
+          <th>Date</th><th>Action</th><th>Contract</th><th>Qty</th><th>Price</th><th>Context</th>
+        </tr></thead><tbody></tbody></table>
+        <div class="small mut" id="swNoTrades">Nothing yet. Do some reps.</div>
+      </div>
+    </div>
+
+    <div>
+      <div class="card">
+        <h3>Dealer lens <span class="q" data-tip="Daily gamma exposure from UW (their contract-style units, one snapshot per trading day). Positive = dealers stabilize; negative = dealers amplify. Walls/flip/magnet come from the real per-strike ladder when UW still serves it (~30 newest days), otherwise from a chain reconstructed to match that day's real net GEX.">?</span></h3>
+        <div class="statrow">
+          <div class="stat"><div class="lab">Net GEX (cons)</div><div class="val num" id="swNetGexLbl">—</div></div>
+          <div class="stat"><div class="lab">Gamma flip</div><div class="val num" id="swFlipLbl">—</div></div>
+        </div>
+        <div class="statrow">
+          <div class="stat"><div class="lab">Call wall</div><div class="val num up" id="swCwLbl">—</div></div>
+          <div class="stat"><div class="lab">Put wall</div><div class="val num dn" id="swPwLbl">—</div></div>
+          <div class="stat"><div class="lab">Magnet</div><div class="val num" style="color:var(--violet)" id="swMagLbl">—</div></div>
+        </div>
+        <canvas id="swGexHistCanvas" height="90"></canvas>
+        <div class="small mut" style="margin-top:4px">Daily net GEX history for this ticker (green +, red −) up to the current sim day. <span class="q" data-tip="Real UW daily greek-exposure series. The yellow marker is the current sim day. Swing regimes persist for days-to-weeks — this strip is your regime map.">?</span></div>
+      </div>
+
+      <div class="card ticket">
+        <h3>Swing ticket <span class="q" data-tip="American-style equity options, $100 multiplier, $0.66/contract fees each way. Premiums are Black-Scholes at an IV estimated from the stock's realized vol (with skew) — realistic, not exchange quotes. Positions carry overnight; they settle at intrinsic value if held to expiry.">?</span></h3>
+        <div class="strikes">
+          <select id="swCpSel"><option value="C">Call</option><option value="P">Put</option></select>
+          <select id="swExpSel" title="Expiry (Fridays)"></select>
+          <select id="swStrikeSel"></select>
+          <input type="number" id="swQtyInp" value="1" min="1" max="200">
+        </div>
+        <div id="swQuoteLine" class="num mut">—</div>
+        <div class="small mut num" id="swGreekLine">—</div>
+        <div class="qb">
+          <button class="buy" id="swBuyBtn">Buy</button>
+          <button class="sell" id="swSellBtn">Sell</button>
+        </div>
+        <div class="statrow" style="margin-top:10px">
+          <div class="stat"><div class="lab">Cash</div><div class="val num" id="swCashLbl">—</div></div>
+          <div class="stat"><div class="lab">Swing P&amp;L</div><div class="val num" id="swPnlLbl">—</div></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Coach</h3>
+        <div id="swCoachFeed" style="max-height:300px;overflow-y:auto;display:flex;flex-direction:column;gap:8px"></div>
+      </div>
+    </div>
+  </div>
+  </div>
+</section>
+
 <!-- ================= CASES ================= -->
 <section class="tabpane" id="tab-cases">
   <h2 style="margin:6px 0 4px">Real days, replayed</h2>
@@ -438,6 +562,7 @@ kbd{background:var(--surface3);border:1px solid var(--border);border-radius:5px;
       <label class="small ink2"><input type="checkbox" class="uwTick" value="NVDA"> NVDA</label>
       <label class="small ink2"><input type="checkbox" class="uwTick" value="META"> META</label>
       <label class="small ink2"><input type="checkbox" class="uwTick" value="TSLA"> TSLA</label>
+      <label class="small ink2" title="Swing-sim data: real daily candles + 30-min bars + daily gamma exposure + cons ladders for the whole S&P 100. Goes to its own storage (uw_swing) used ONLY by the Practice Swing Sim tab — day-trading data above is untouched."><input type="checkbox" id="swTick100"> <b>S&amp;P 100 (swing)</b></label>
     </div>
     <div class="rowflex" style="margin-top:8px;align-items:center">
       <label class="small ink2">Days back: <input type="number" id="uwDays" value="90" min="5" max="500" style="width:64px"></label>
@@ -453,7 +578,7 @@ kbd{background:var(--surface3);border:1px solid var(--border);border-radius:5px;
   </div>
   <div class="card" style="max-width:880px" id="uwSupaCard">
     <h3>Step 2 (optional) — mirror to Supabase</h3>
-    <p class="small ink2" style="line-height:1.55">Run the updated <code>supabase_setup.sql</code> in your Supabase SQL editor first (creates the <code>uw_days</code> table), then paste your project's <b>anon public</b> key (Settings → API keys). Never paste the service_role key anywhere.</p>
+    <p class="small ink2" style="line-height:1.55">Run the updated <code>supabase_setup.sql</code> in your Supabase SQL editor first (creates the <code>uw_days</code> table for day-trading replays and the <code>uw_swing</code> table for the Practice Swing Sim), then paste your project's <b>anon public</b> key (Settings → API keys). Never paste the service_role key anywhere. Push/Load automatically handles both tables.</p>
     <div class="rowflex" style="align-items:center">
       <input type="password" id="supaKey" placeholder="Supabase anon public key" style="min-width:290px">
       <button id="uwPushBtn" disabled>Push to Supabase</button>
@@ -2678,6 +2803,9 @@ async function runBackfill(){
   $('uwSaveBtn').disabled = !Object.keys(UWDATA.tickers).length;
   $('uwPushBtn').disabled = !Object.keys(UWDATA.tickers).length;
   refreshReplayPicker();
+  if ($('swTick100') && $('swTick100').checked){
+    try { await runSwingBackfill(); } catch (e){ uwLog('⛔ swing backfill: ' + e.message); }
+  }
 }
 $('uwRunBtn').addEventListener('click', runBackfill);
 $('uwStopBtn').addEventListener('click', () => { uwAbort = true; });
@@ -2696,15 +2824,30 @@ $('uwSaveBtn').addEventListener('click', () => {
   a.download = 'uw_gex_data.json';
   a.click();
   uwLog('Saved uw_gex_data.json — move it into your project folder. Load it here any time.');
+  if (typeof SWINGDATA !== 'undefined' && Object.keys(SWINGDATA.tickers).length){
+    const b2 = new Blob([JSON.stringify({ swing: true, tickers: SWINGDATA.tickers })], { type: 'application/json' });
+    const a2 = document.createElement('a');
+    a2.href = URL.createObjectURL(b2);
+    a2.download = 'uw_swing_data.json';
+    a2.click();
+    uwLog('Also saved uw_swing_data.json (swing-sim dataset).');
+  }
 });
 $('uwLoadInp').addEventListener('change', async e => {
   const f = e.target.files[0];
   if (!f) return;
   try {
-    UWDATA = JSON.parse(await f.text());
-    uwLog(`Loaded ${f.name}: ` + Object.keys(UWDATA.tickers).map(t => t + ' (' + Object.keys(UWDATA.tickers[t].days || {}).length + 'd)').join(', '));
-    $('uwSaveBtn').disabled = false; $('uwPushBtn').disabled = false;
-    refreshReplayPicker();
+    const j = JSON.parse(await f.text());
+    if (j && j.swing){
+      SWINGDATA = { tickers: j.tickers || {} };
+      uwLog(`Loaded SWING file ${f.name}: ` + Object.keys(SWINGDATA.tickers).length + ' tickers');
+      swAfterDataChange();
+    } else {
+      UWDATA = j;
+      uwLog(`Loaded ${f.name}: ` + Object.keys(UWDATA.tickers).map(t => t + ' (' + Object.keys(UWDATA.tickers[t].days || {}).length + 'd)').join(', '));
+      $('uwSaveBtn').disabled = false; $('uwPushBtn').disabled = false;
+      refreshReplayPicker();
+    }
   } catch (err){ uwLog('⛔ could not parse file: ' + err.message); }
 });
 
@@ -2736,6 +2879,9 @@ $('uwPushBtn').addEventListener('click', async () => {
     }
   }
   st.textContent = `done — ${n} ticker-days in Supabase ✓`;
+  if (typeof SWINGDATA !== 'undefined' && Object.keys(SWINGDATA.tickers).length){
+    try { await swingPushAll(st); } catch (e){ st.textContent += ' · swing push failed: ' + e.message; }
+  }
 });
 /* the anon key is public-by-design; remember it so real-data mode works on any visit */
 try { const k = localStorage.getItem('supaAnonKey'); if (k && !$('supaKey').value) $('supaKey').value = k; } catch (e){}
@@ -2772,6 +2918,7 @@ $('uwPullBtn').addEventListener('click', async () => {
   st.textContent = 'loading…';
   try { st.textContent = `loaded ${await supaLoadAll()} ticker-days ✓`; }
   catch (e){ st.textContent = e.message === 'no anon key' ? 'paste your anon key first' : 'error: ' + e.message; }
+  try { const ns = await swingLoadAll(); if (ns) st.textContent += ` · swing: ${ns} tickers ✓`; } catch (e){}
 });
 
 /* ---------- replay ---------- */
@@ -3034,6 +3181,1179 @@ function startReplayDay(t, date){
     'Candles are the actual tape; the gamma ladder is UW’s real morning positioning, repriced as spot moves.'} Premiums are Black-Scholes at ~${(iv*100).toFixed(0)}% IV (estimated from that month's realized vol) — realistic, not exchange quotes.`, 'info');
 }
 $('rpStartBtn').addEventListener('click', startReplay);
+
+/* ============================================================
+   PRACTICE SWING SIM — S&P 100 multi-day swing trainer
+   Data: real daily candles + real 30-min bars (newest ~30 trading
+   days) + real daily gamma exposure (cons units) + real per-strike
+   cons ladders where UW still serves them. Older days: intraday
+   bars reconstructed from that day's REAL OHLC (marked ◐).
+   Storage: SWINGDATA in memory ⇄ Supabase table uw_swing.
+============================================================ */
+'use strict';
+
+const SP100 = ['AAPL','ABBV','ABT','ACN','ADBE','AIG','AMD','AMGN','AMT','AMZN','AVGO','AXP','BA','BAC','BK','BKNG','BLK','BMY','BRK-B','C','CAT','CHTR','CL','CMCSA','COF','COP','COST','CRM','CSCO','CVS','CVX','DE','DHR','DIS','DUK','EMR','ETN','FDX','GD','GE','GEV','GILD','GM','GOOG','GOOGL','GS','HD','HON','IBM','INTC','INTU','ISRG','JNJ','JPM','KO','LIN','LLY','LMT','LOW','MA','MCD','MDLZ','MDT','MET','META','MMM','MO','MRK','MS','MSFT','NEE','NFLX','NKE','NOW','NVDA','ORCL','PEP','PFE','PG','PLTR','PM','PYPL','QCOM','RTX','SBUX','SCHW','SO','SPG','T','TGT','TMO','TMUS','TSLA','TXN','UNH','UNP','UPS','USB','V','VZ','WFC','WMT','XOM'];
+
+let SWINGDATA = { tickers: {} };
+/* tickers[t] = { daily:[{date,o,h,l,c}], slots:{date:[[slot,o,h,l,c]]},
+                  gexDaily:[{date,net,cg,pg}], ladders:{date:[[k,cg,pg]]} } */
+let SW = null;
+let swTimer = null, swSpeed = 0, swLastSpeed = 1;
+let swTf = 13;                 // slots per tick & per chart bar: 1=30m, 2=1h, 8=4h, 13=1d
+let swChartMode = 'line';
+let swSmaOn = { 10:false, 20:false, 50:false, 200:false };
+let swRsiOn = false;
+const SW_SLOTS = 13;           // 30-min slots per session, 9:30 → 16:00 ET
+const SW_CASH = 25000;
+const SW_WINDOW = 90;          // trading-day window (UW trial lookback)
+const SW_MINSTART = 30;        // first ~30 days are always look-back history
+
+function swHash(s){ let h = 2166136261; for (let i=0;i<s.length;i++){ h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return h >>> 0; }
+function swFmtCons(v){
+  if (v == null || !isFinite(v)) return '—';
+  const s = v < 0 ? '−' : '+', a = Math.abs(v);
+  return s + (a >= 0.95e9 ? (a/1e9).toFixed(2)+'B' : a >= 0.95e6 ? (a/1e6).toFixed(1)+'M' : a >= 1e3 ? (a/1e3).toFixed(1)+'k' : a.toFixed(0));
+}
+function swFmtPx(v){ return v >= 1000 ? v.toLocaleString(undefined,{maximumFractionDigits:0}) : v.toLocaleString(undefined,{maximumFractionDigits:2}); }
+function swSlotClock(slot){
+  const t = 9*60 + 30 + (slot+1)*30;   // label = end of the 30-min slot
+  const h = Math.floor(t/60), m = t % 60, h12 = ((h+11)%12)+1;
+  return `${h12}:${String(m).padStart(2,'0')} ${h >= 12 ? 'PM' : 'AM'}`;
+}
+function swDow(dateStr){ return ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][new Date(dateStr + 'T12:00:00Z').getUTCDay()]; }
+
+/* ---------- strike grid for arbitrary stock prices ---------- */
+function swStrikeStep(p){
+  for (const s of [0.5, 1, 2.5, 5, 10, 25, 50, 100]) if (p/s <= 120) return s;
+  return 100;
+}
+function swMakeChain(spot, rng, iv){
+  const step = swStrikeStep(spot);
+  const strikes = [];
+  const lo = Math.max(step, Math.round(spot*0.86/step)*step), hi = Math.round(spot*1.14/step)*step;
+  for (let k = lo; k <= hi + 1e-9; k += step){
+    const d = (k - spot)/spot;
+    const atmC = Math.exp(-Math.pow((d-0.01)/0.03,2)), atmP = Math.exp(-Math.pow((d+0.012)/0.033,2));
+    const ladC = d >= 0 ? Math.exp(-d/0.06) : 0.4*Math.exp(d/0.03);
+    const ladP = d <= 0 ? Math.exp(d/0.07) : 0.35*Math.exp(-d/0.035);
+    let cOI = 120 + 1400*atmC + 800*ladC, pOI = 120 + 1300*atmP + 850*ladP;
+    if (Math.round(k/step) % 5 === 0){ cOI *= 1.7; pOI *= 1.7; }
+    cOI *= Math.exp((rng()*2-1)*1.0); pOI *= Math.exp((rng()*2-1)*1.0);
+    strikes.push({ k: +k.toFixed(2), cOI: Math.round(cOI), pOI: Math.round(pOI), cSign: 1, pSign: -1 });
+  }
+  return { strikes, ivNow: iv, skew: 0.7, curve: 0.9 };
+}
+/* chain whose SHAPE comes from the real cons ladder (flip location is
+   scale-invariant, so no dollar conversion is needed) */
+function swChainFromLadder(ladder, S0, iv){
+  const near = ladder.filter(r => r[0] >= S0*0.86 && r[0] <= S0*1.14);
+  let maxAbs = 0;
+  for (const r of near) maxAbs = Math.max(maxAbs, Math.abs(r[1] || 0), Math.abs(r[2] || 0));
+  if (!maxAbs || near.length < 6) return null;
+  const strikes = near.map(r => ({
+    k: r[0],
+    cOI: Math.max(1, 15000*Math.abs(r[1] || 0)/maxAbs),
+    pOI: Math.max(1, 15000*Math.abs(r[2] || 0)/maxAbs),
+    cSign: 1, pSign: -1
+  })).sort((a,b) => a.k - b.k);
+  return { strikes, ivNow: iv, skew: 0.7, curve: 0.9 };
+}
+function swLevelsFromLadder(ladder, S0){
+  let cw = null, cwv = 0, pw = null, pwv = 0, mag = null, magv = 0;
+  for (const [k, cg, pg] of ladder){
+    if (k < S0*0.86 || k > S0*1.14) continue;
+    if (k >= S0 && (cg || 0) > cwv){ cwv = cg; cw = k; }
+    if (k <= S0 && (pg || 0) < pwv){ pwv = pg; pw = k; }
+    const tot = Math.abs(cg || 0) + Math.abs(pg || 0);
+    if (k >= S0*0.92 && k <= S0*1.08 && tot > magv){ magv = tot; mag = k; }
+  }
+  return { callWall: cw, putWall: pw, magnet: mag };
+}
+
+/* ---------- reconstructed 30-min bars from real daily OHLC ---------- */
+function swSynthSlots(o, h, l, c, seed){
+  const rng = E.mulberry32(seed);
+  const upFirst = rng() < ((c >= o) ? 0.42 : 0.58);
+  let a = 2 + Math.floor(rng()*5);
+  let b = Math.min(11, a + 2 + Math.floor(rng()*5));
+  const pts = [[0, o], [a, upFirst ? h : l], [b, upFirst ? l : h], [12, c]];
+  const closes = new Array(SW_SLOTS);
+  for (let s = 0; s < SW_SLOTS; s++){
+    let p0 = pts[0], p1 = pts[pts.length-1];
+    for (let j = 0; j < pts.length-1; j++) if (s >= pts[j][0] && s <= pts[j+1][0]){ p0 = pts[j]; p1 = pts[j+1]; break; }
+    const t = p1[0] === p0[0] ? 0 : (s - p0[0])/(p1[0] - p0[0]);
+    let v = p0[1] + (p1[1]-p0[1])*t + (rng()*2-1)*(h-l)*0.07;
+    closes[s] = Math.min(h, Math.max(l, v));
+  }
+  closes[12] = c;
+  const bars = [];
+  let prev = o, hiI = 0, loI = 0;
+  for (let s = 0; s < SW_SLOTS; s++){ if (closes[s] >= closes[hiI]) hiI = s; if (closes[s] <= closes[loI]) loI = s; }
+  for (let s = 0; s < SW_SLOTS; s++){
+    const cc = closes[s];
+    let bh = Math.max(prev, cc), bl = Math.min(prev, cc);
+    if (s === hiI) bh = h;
+    if (s === loI) bl = l;
+    bars.push([s, prev, bh, bl, cc]);
+    prev = cc;
+  }
+  return bars;
+}
+
+/* ---------- backfill (S&P 100 → SWINGDATA) ---------- */
+async function runSwingBackfill(){
+  const key = $('uwKey').value.trim();
+  if (!key){ uwLog('⚠ paste your UW API key first'); return; }
+  uwAbort = false;
+  $('uwRunBtn').disabled = true; $('uwStopBtn').disabled = false;
+  uwLog(`<b>══ S&P 100 SWING backfill ══</b> real 1d candles + 30m bars + daily GEX + cons ladders. This data feeds ONLY the Practice Swing Sim tab (table uw_swing).`);
+  let req = 0, okT = 0, failT = 0;
+  const t0 = Date.now();
+  for (let ti = 0; ti < SP100.length; ti++){
+    if (uwAbort){ uwLog('⏹ swing backfill stopped.'); break; }
+    let t = SP100[ti];
+    const T = SWINGDATA.tickers[t] = SWINGDATA.tickers[t] || { daily: [], slots: {}, gexDaily: [], ladders: {} };
+    const tryFetch = async path => {
+      try { req++; return await uwFetch(key, path); }
+      catch (e){
+        if (String(e.message).startsWith('AUTH')) throw e;
+        // alternate class-share spelling (BRK-B ⇄ BRK.B)
+        if (/[-.]/.test(t)){
+          const alt = t.includes('-') ? t.replace('-', '.') : t.replace('.', '-');
+          try { req++; const r = await uwFetch(key, path.replace(`/stock/${t}/`, `/stock/${alt}/`)); t = alt; return r; } catch (e2){}
+        }
+        return null;
+      }
+    };
+    // 1) daily candles (long history → seeds the 200-day SMA on the daily tf)
+    if (!T.daily.length){
+      const dj = await tryFetch(`/stock/${t}/ohlc/1d?limit=550`);
+      if (dj) T.daily = (dj.data || dj).map(r => ({ date: (r.date || r.start_time || '').slice(0,10), o:+r.open, h:+r.high, l:+r.low, c:+r.close }))
+        .filter(r => r.date && isFinite(r.c) && r.c > 0).sort((a,b) => a.date < b.date ? -1 : 1);
+    }
+    if (!T.daily.length){ uwLog(`${t}: no daily candles — skipped`); failT++; continue; }
+    // 2) daily gamma exposure series (cons units, real for the whole window and beyond)
+    if (!T.gexDaily.length){
+      const gj = await tryFetch(`/stock/${t}/greek-exposure?timeframe=1Y`);
+      if (gj) T.gexDaily = (gj.data || gj).map(r => {
+        const cg = +(r.call_gamma ?? 0), pgRaw = +(r.put_gamma ?? 0);
+        const pg = pgRaw <= 0 ? pgRaw : -pgRaw;
+        return { date: (r.date || '').slice(0,10), cg, pg, net: cg + pg };
+      }).filter(r => r.date && isFinite(r.net)).sort((a,b) => a.date < b.date ? -1 : 1);
+    }
+    // 3) 30-min bars — one pull covers everything UW still retains (~30 trading days)
+    const cj = await tryFetch(`/stock/${t}/ohlc/30m?limit=2500`);
+    if (cj){
+      let kept = 0;
+      for (const r of (cj.data || cj)){
+        const st = r.start_time || r.market_time || r.date || '';
+        const dt = new Date(st);
+        if (isNaN(+dt)) continue;
+        const et = new Date(dt.toLocaleString('en-US', { timeZone: 'America/New_York' }));
+        const mins = et.getHours()*60 + et.getMinutes() - 570;   // minutes past 9:30
+        if (mins < 0 || mins >= 390 || mins % 30 !== 0) continue;
+        const slot = mins/30;
+        const dkey = `${et.getFullYear()}-${String(et.getMonth()+1).padStart(2,'0')}-${String(et.getDate()).padStart(2,'0')}`;
+        const arr = T.slots[dkey] = T.slots[dkey] || [];
+        if (!arr.some(x => x[0] === slot)){ arr.push([slot, +r.open, +r.high, +r.low, +r.close]); kept++; }
+      }
+      for (const d of Object.keys(T.slots)) T.slots[d].sort((a,b) => a[0]-b[0]);
+    }
+    // 4) per-strike cons ladders for the newest ~32 window days (older 404s are expected — retention)
+    const winDates = T.daily.slice(-SW_WINDOW).map(r => r.date);
+    const ladTargets = winDates.slice(-32);
+    let lOk = 0, lFail = 0;
+    for (const date of ladTargets){
+      if (uwAbort) break;
+      if (T.ladders[date]){ lOk++; continue; }
+      const lj = await tryFetch(`/stock/${t}/greek-exposure/strike?date=${date}`);
+      if (lj){
+        const rows = (lj.data || lj).map(r => {
+          const pg = +(r.put_gamma_exposure ?? r.put_gex ?? r.put_gamma ?? 0);
+          return [ +(r.strike ?? r.strike_price), +(r.call_gamma_exposure ?? r.call_gex ?? r.call_gamma ?? 0), pg <= 0 ? pg : -pg ];
+        }).filter(r => isFinite(r[0]) && r[0] > 0);
+        if (rows.length >= 6){ T.ladders[date] = rows.sort((a,b) => a[0]-b[0]); lOk++; } else lFail++;
+      } else lFail++;
+      await new Promise(res => setTimeout(res, 90));
+    }
+    const realDays = Object.keys(T.slots).length;
+    okT++;
+    uwLog(`${t}: ${T.daily.length}d daily · ${T.gexDaily.length}d GEX · ${realDays}d real 30m · ladders ${lOk}✓/${lFail}✗ · ${req} req total`);
+    await new Promise(res => setTimeout(res, 100));
+  }
+  uwLog(`<b>Swing backfill done: ${okT} tickers OK, ${failT} failed · ${req} requests · ${((Date.now()-t0)/60000).toFixed(1)} min.</b> Click "Push to Supabase" to store it (table uw_swing), then regenerate your UW key.`);
+  $('uwRunBtn').disabled = false; $('uwStopBtn').disabled = true;
+  $('uwSaveBtn').disabled = false;
+  $('uwPushBtn').disabled = false;
+  swAfterDataChange();
+}
+
+/* ---------- Supabase mirror (uw_swing, one row per ticker) ---------- */
+async function swingPushAll(st){
+  const tk = Object.keys(SWINGDATA.tickers).filter(t => (SWINGDATA.tickers[t].daily || []).length);
+  if (!tk.length) return;
+  let n = 0;
+  for (let i = 0; i < tk.length; i += 4){
+    const rows = tk.slice(i, i+4).map(t => ({
+      ticker: t,
+      daily: SWINGDATA.tickers[t].daily,
+      slots: SWINGDATA.tickers[t].slots,
+      gex_daily: SWINGDATA.tickers[t].gexDaily,
+      ladders: SWINGDATA.tickers[t].ladders
+    }));
+    const r = await fetch(SUPA_URL + '/rest/v1/uw_swing?on_conflict=ticker', {
+      method: 'POST', headers: await supaHeaders(), body: JSON.stringify(rows) });
+    if (!r.ok) throw new Error('uw_swing HTTP ' + r.status + ' (did you run the updated supabase_setup.sql?)');
+    n += rows.length;
+    if (st) st.textContent = `swing: pushed ${n}/${tk.length} tickers…`;
+  }
+  if (st) st.textContent = `done — swing: ${n} tickers in Supabase ✓`;
+}
+async function swingLoadAll(){
+  const key = $('supaKey').value.trim();
+  if (!key) throw new Error('no anon key');
+  const r = await fetch(SUPA_URL + '/rest/v1/uw_swing?select=ticker,daily,slots,gex_daily,ladders&limit=200', { headers: await supaHeaders() });
+  if (!r.ok) throw new Error('uw_swing HTTP ' + r.status);
+  const rows = await r.json();
+  for (const row of rows){
+    const cur = SWINGDATA.tickers[row.ticker] || {};
+    SWINGDATA.tickers[row.ticker] = {
+      daily: (cur.daily && cur.daily.length) ? cur.daily : (row.daily || []),
+      slots: Object.assign({}, row.slots || {}, cur.slots || {}),
+      gexDaily: (cur.gexDaily && cur.gexDaily.length) ? cur.gexDaily : (row.gex_daily || []),
+      ladders: Object.assign({}, row.ladders || {}, cur.ladders || {})
+    };
+  }
+  if (rows.length) swAfterDataChange();
+  return rows.length;
+}
+function swAfterDataChange(){
+  const tk = Object.keys(SWINGDATA.tickers).filter(t => (SWINGDATA.tickers[t].daily || []).length >= 45).sort();
+  const sel = $('swTickerSel');
+  const prev = sel.value;
+  sel.innerHTML = '<option value="__random">🎲 Random ticker</option>' + tk.map(t => `<option>${t}</option>`).join('');
+  if ([...sel.options].some(o => o.value === prev)) sel.value = prev;
+  $('swEmpty').style.display = tk.length ? 'none' : '';
+  $('swinggrid').style.display = tk.length ? '' : 'none';
+}
+
+/* ---------- session construction ---------- */
+function swEstIV(T, uptoDate){
+  const closes = T.daily.filter(r => r.date <= uptoDate).map(r => r.c);
+  if (closes.length < 23) return 0.3;
+  const rets = [];
+  for (let j = closes.length - 22; j < closes.length - 1; j++) rets.push(Math.log(closes[j+1]/closes[j]));
+  const mean = rets.reduce((a,b) => a+b, 0)/rets.length;
+  const rv = Math.sqrt(rets.reduce((a,b) => a + (b-mean)*(b-mean), 0)/rets.length)*Math.sqrt(252);
+  return Math.min(1.5, Math.max(0.12, rv*1.15));
+}
+function swNewSession(){
+  const tk = Object.keys(SWINGDATA.tickers).filter(t => (SWINGDATA.tickers[t].daily || []).length >= 45);
+  if (!tk.length){ switchTab('data'); uwLog('⚠ No swing data. Tick "S&P 100 (swing)" and run a backfill, or load from Supabase.'); return; }
+  let t = $('swTickerSel').value;
+  if (t === '__random' || !tk.includes(t)) t = tk[Math.floor(Math.random()*tk.length)];
+  const T = SWINGDATA.tickers[t];
+  const win = T.daily.slice(-SW_WINDOW);
+  const len = win.length;
+  const minStart = Math.min(SW_MINSTART, Math.max(10, len - 12));
+  const maxStart = len - 6;    // always leave a few tradable days of "future"
+  const startIdx = minStart + Math.floor(Math.random()*Math.max(1, maxStart - minStart + 1));
+  startSwing(t, startIdx);
+}
+function startSwing(t, startIdx){
+  const T = SWINGDATA.tickers[t];
+  const win = T.daily.slice(-SW_WINDOW);
+  const dates = win.map(r => r.date);
+  const N = win.length * SW_SLOTS;
+  const S = new Array(N), candles = new Array(N), realDay = new Array(win.length).fill(false);
+  for (let d = 0; d < win.length; d++){
+    const row = win[d];
+    let bars = T.slots[row.date];
+    if (bars && bars.length >= 10){
+      realDay[d] = true;
+      const bmap = new Map(bars.map(b => [b[0], b]));
+      let last = bars[0][1];
+      for (let s = 0; s < SW_SLOTS; s++){
+        const b = bmap.get(s);
+        const i = d*SW_SLOTS + s;
+        if (b){ candles[i] = { o: b[1], h: b[2], l: b[3], c: b[4] }; last = b[4]; }
+        else candles[i] = { o: last, h: last, l: last, c: last };
+        S[i] = candles[i].c;
+      }
+    } else {
+      const sb = swSynthSlots(row.o, row.h, row.l, row.c, swHash(t + row.date));
+      for (let s = 0; s < SW_SLOTS; s++){
+        const i = d*SW_SLOTS + s, b = sb[s];
+        candles[i] = { o: b[1], h: b[2], l: b[3], c: b[4] };
+        S[i] = b[4];
+      }
+    }
+  }
+  const gexByDate = new Map((T.gexDaily || []).map(r => [r.date, r]));
+  const mags = (T.gexDaily || []).map(r => Math.abs(r.net)).sort((a,b) => a-b);
+  SW = {
+    t, T, win, dates, S, candles, realDay, N,
+    i: startIdx*SW_SLOTS, startIdx,
+    cash: SW_CASH, realized: 0, positions: new Map(), trades: [],
+    coachFlags: {}, done: false,
+    lastBuyI: null, lastPromptDay: -1,
+    gexByDate, gexMedian: mags.length ? mags[Math.floor(mags.length/2)] : 0,
+    _lv: null, _lvDay: -1, _heldOTM: false, _promptsSeen: 0, _promptsActed: 0
+  };
+  $('swCoachFeed').innerHTML = '';
+  $('swBlotter').querySelector('tbody').innerHTML = '';
+  $('swNoTrades').style.display = '';
+  setSwSpeed(0);
+  swPopulateTicket(true);
+  const realCt = realDay.filter(Boolean).length;
+  $('swDayTitle').textContent = `◆ ${t} · window ${dates[0]} → ${dates[dates.length-1]} · chart starts ${dates[startIdx]} (day ${startIdx+1} of ${dates.length})`;
+  swCoachSay(swOpeningBriefing(realCt), 'info');
+  swRefreshAll();
+  switchTab('swing');
+}
+function swCurDay(){ return Math.floor(SW.i/SW_SLOTS); }
+function swCurSlot(){ return SW.i % SW_SLOTS; }
+function swCurDate(){ return SW.dates[swCurDay()]; }
+function swSpot(){ return SW.S[SW.i]; }
+function swNetFor(dayIdx){
+  const g = SW.gexByDate.get(SW.dates[dayIdx]);
+  if (g) return g.net;
+  for (let d = dayIdx; d >= 0; d--){ const p = SW.gexByDate.get(SW.dates[d]); if (p) return p.net; }
+  return null;
+}
+/* day levels: real ladder → walls/magnet + flip (chain from ladder shape);
+   no ladder → synthetic chain tuned to the day's regime */
+function swDayLevels(dayIdx){
+  if (SW._lvDay === dayIdx && SW._lv) return SW._lv;
+  const date = SW.dates[dayIdx];
+  const S0 = SW.candles[dayIdx*SW_SLOTS].o || SW.S[dayIdx*SW_SLOTS];
+  const iv = swEstIV(SW.T, date);
+  const net = swNetFor(dayIdx);
+  const ladder = SW.T.ladders ? SW.T.ladders[date] : null;
+  let lv = { net, iv, ladder: ladder || null, real: !!ladder, callWall: null, putWall: null, magnet: null, flip: null, chain: null };
+  if (ladder){
+    Object.assign(lv, swLevelsFromLadder(ladder, S0));
+    const chain = swChainFromLadder(ladder, S0, iv);
+    if (chain){
+      lv.chain = chain;
+      lv.flip = E.gexCurve(chain, S0, E.T0, false, 0.09).flip;
+    }
+  } else {
+    const rng = E.mulberry32(swHash(SW.t + date + 'lvl'));
+    const chain = swMakeChain(S0, rng, iv);
+    if (net != null){
+      const mag01 = SW.gexMedian ? Math.min(1, Math.abs(net)/(SW.gexMedian*2.5)) : 0.3;
+      const target = net >= 0 ? S0*(1 - 0.004 - 0.02*mag01) : S0*(1 + 0.003 + 0.015*mag01);
+      E.tuneFlip(chain, S0, E.T0, target);
+    }
+    lv.chain = chain;
+    lv.flip = E.gexCurve(chain, S0, E.T0, false, 0.09).flip;
+    const prof = E.gexProfile(chain, S0, E.T0, false);
+    let cw=null,cwv=0,pw=null,pwv=0,magk=null,magv=0;
+    for (const r of prof){
+      if (r.k >= S0 && r.cGex > cwv){ cwv = r.cGex; cw = r.k; }
+      if (r.k <= S0 && r.pGex < pwv){ pwv = r.pGex; pw = r.k; }
+      const tot = Math.abs(r.cGex) + Math.abs(r.pGex);
+      if (tot > magv){ magv = tot; magk = r.k; }
+    }
+    lv.callWall = cw; lv.putWall = pw; lv.magnet = magk;
+  }
+  SW._lv = lv; SW._lvDay = dayIdx;
+  return lv;
+}
+/* strip rows in cons units (real ladder, or chain profile rescaled to the day's net) */
+function swStripProfile(dayIdx){
+  const lv = swDayLevels(dayIdx);
+  if (lv.ladder) return lv.ladder.map(r => ({ k: r[0], net: (r[1] || 0) + (r[2] || 0) }));
+  if (!lv.chain) return [];
+  const S0 = SW.candles[dayIdx*SW_SLOTS].o || SW.S[dayIdx*SW_SLOTS];
+  const prof = E.gexProfile(lv.chain, S0, E.T0, false);
+  let chainNet = 0;
+  for (const r of prof) chainNet += r.cGex + r.pGex;
+  const f = (lv.net != null && chainNet) ? Math.abs(lv.net/chainNet) * Math.sign(lv.net) * Math.sign(chainNet) : 1e-6;
+  return prof.map(r => ({ k: r.k, net: (r.cGex + r.pGex)*f }));
+}
+
+/* ---------- speed / clock ---------- */
+function setSwSpeed(s){
+  swSpeed = s;
+  if (swTimer){ clearInterval(swTimer); swTimer = null; }
+  $('swPauseBtn').textContent = s === 0 ? '▶' : '⏸';
+  document.querySelectorAll('.swspd').forEach(b => b.style.outline = (+b.dataset.swspeed === s) ? '2px solid var(--blue)' : 'none');
+  if (s > 0) swTimer = setInterval(swAdvanceTick, 1000/s);
+}
+$('swPauseBtn').addEventListener('click', () => { if (SW && !SW.done) setSwSpeed(swSpeed === 0 ? (swLastSpeed || 1) : 0); });
+document.querySelectorAll('.swspd').forEach(b => b.addEventListener('click', () => { if (!SW || SW.done) return; swLastSpeed = +b.dataset.swspeed; setSwSpeed(swLastSpeed); }));
+$('swStepBtn').addEventListener('click', () => { if (SW && !SW.done) swAdvanceTick(); });
+$('swNewBtn').addEventListener('click', swNewSession);
+$('swChartModeBtn').addEventListener('click', () => {
+  swChartMode = swChartMode === 'line' ? 'candles' : 'line';
+  $('swChartModeBtn').textContent = swChartMode === 'line' ? '📈 Line' : '🕯 Candles';
+  if (SW) swDrawPrice();
+});
+document.querySelectorAll('.swTfBtn').forEach(b => b.addEventListener('click', () => {
+  swTf = +b.dataset.swtf;
+  document.querySelectorAll('.swTfBtn').forEach(x => x.style.outline = x === b ? '2px solid var(--blue)' : 'none');
+  if (SW) swDrawPrice();
+}));
+document.querySelectorAll('.swIndBtn').forEach(b => b.addEventListener('click', () => {
+  const n = +b.dataset.swind;
+  swSmaOn[n] = !swSmaOn[n];
+  b.style.outline = swSmaOn[n] ? '2px solid var(--border)' : 'none';
+  b.style.background = swSmaOn[n] ? 'var(--surface3)' : '';
+  if (SW) swDrawPrice();
+}));
+$('swRsiBtn').addEventListener('click', () => {
+  swRsiOn = !swRsiOn;
+  $('swRsiBtn').style.outline = swRsiOn ? '2px solid var(--violet)' : 'none';
+  if (SW) swDrawPrice();
+});
+$('swLoadBtn').addEventListener('click', async () => {
+  const st = $('swLoadStatus');
+  st.textContent = 'loading…';
+  try { st.textContent = `loaded ${await swingLoadAll()} tickers ✓`; }
+  catch (e){ st.textContent = e.message === 'no anon key' ? 'paste your Supabase anon key in Data & Replay first' : 'error: ' + e.message; }
+});
+
+/* ---------- advancing ---------- */
+function swAdvanceTick(){
+  if (!SW || SW.done) return;
+  SW._halt = false;
+  for (let n = 0; n < swTf; n++){
+    if (SW.done || SW._halt) break;   // a check-in or session end stops the tick
+    swAdvanceSlot();
+  }
+  if (SW) swRefreshAll();
+}
+function swAdvanceSlot(){
+  if (!SW || SW.done) return;
+  if (SW.i >= SW.N - 1){ swEnd('end of the data window'); return; }
+  SW.i++;
+  const slot = swCurSlot(), day = swCurDay();
+  if (slot === 0){
+    SW._lvDay = -1;           // refresh levels for the new day
+    swDayCoach(day);
+    // decision check-in: a full trading day has passed since the last buy
+    if (SW.positions.size && SW.lastBuyI != null && (SW.i - SW.lastBuyI) >= SW_SLOTS && day > SW.lastPromptDay){
+      SW.lastPromptDay = day;
+      SW._halt = true;
+      swDecisionPrompt();
+    }
+  }
+  if (slot === SW_SLOTS - 1) swSettleExpiries();
+  if (SW.i >= SW.N - 1){ swEnd('end of the data window'); }
+}
+function swSettleExpiries(){
+  const date = swCurDate();
+  const Sc = SW.S[SW.i];
+  for (const [key, p] of [...SW.positions]){
+    if (p.exp !== date) continue;
+    const intr = Math.max(0, p.cp === 'C' ? Sc - p.K : p.K - Sc);
+    if (intr === 0 && p.qty > 0) SW._heldOTM = true;
+    SW.realized += (intr - p.avg)*100*p.qty;
+    SW.cash += intr*100*p.qty;
+    SW.positions.delete(key);
+    swCoachSay(`<b>${p.K}${p.cp} ${p.exp} expired</b> — settled at intrinsic ${fmt2(intr)} (${intr === 0 ? 'worthless' : fmt$(intr*100*p.qty)}).`, intr === 0 && p.qty > 0 ? 'warn' : 'info');
+  }
+}
+function swEnd(why){
+  if (SW.done) return;
+  SW.done = true;
+  SW._halt = true;
+  setSwSpeed(0);
+  let note = [];
+  for (const [key, p] of SW.positions){
+    const q = swQuote(p.cp, p.K, p.exp);
+    SW.realized += (q.mid - p.avg)*100*p.qty;
+    SW.cash += q.mid*100*p.qty;
+    note.push(`${p.qty > 0 ? '+' : ''}${p.qty} ${p.K}${p.cp} ${p.exp} liquidated at ${fmt2(q.mid)}`);
+  }
+  SW.positions.clear();
+  swRefreshAll();
+  swShowReport(why, note);
+}
+
+/* ---------- options: expiries, quotes, trading ---------- */
+function swExpiries(){
+  const cur = new Date(swCurDate() + 'T12:00:00Z');
+  const out = [];
+  const d = new Date(cur);
+  d.setUTCDate(d.getUTCDate() + ((5 - d.getUTCDay() + 7) % 7 || 7));   // next Friday strictly after today
+  for (let w = 0; w < 8; w++){
+    const iso = d.toISOString().slice(0,10);
+    const dte = Math.round((+d - +cur)/86400000);
+    if (dte >= 2 && dte <= 52) out.push({ date: iso, dte });
+    d.setUTCDate(d.getUTCDate() + 7);
+  }
+  return out;
+}
+function swYearsToExp(expDate){
+  const curMs = +new Date(swCurDate() + 'T12:00:00Z') + (swCurSlot()+1)/SW_SLOTS*0.27*86400000;
+  const expMs = +new Date(expDate + 'T20:00:00Z');
+  return Math.max((expMs - curMs)/(365*86400000), 1/3650);
+}
+function swQuote(cp, K, expDate){
+  const S = swSpot(), T = swYearsToExp(expDate);
+  const lv = swDayLevels(swCurDay());
+  const iv = E.smileIV(lv.iv, K, S, 0.7, 0.9);
+  const b = E.bs(S, K, T, iv, cp === 'C');
+  const half = Math.max(0.03, b.price*0.02);
+  const later = E.bs(S, K, Math.max(T - 1/365, 1e-9), iv, cp === 'C');
+  return { mid: b.price, bid: Math.max(0, b.price - half), ask: b.price + half,
+           delta: b.delta, gamma: b.gamma, thetaDay: later.price - b.price, iv };
+}
+function swPopulateTicket(force){
+  if (!SW) return;
+  const exps = swExpiries();
+  const esel = $('swExpSel');
+  const prevE = esel.value;
+  esel.innerHTML = exps.map(e => `<option value="${e.date}">${e.date.slice(5)} · ${e.dte}d</option>`).join('');
+  if (!force && [...esel.options].some(o => o.value === prevE)) esel.value = prevE;
+  else if (esel.options.length > 1) esel.selectedIndex = 1;   // default ~2 weeks out
+  const S = swSpot();
+  const lv = swDayLevels(swCurDay());
+  const ssel = $('swStrikeSel');
+  const prevK = +ssel.value;
+  let ks;
+  if (lv.ladder){
+    ks = lv.ladder.map(r => r[0]).filter(k => k > S*0.85 && k < S*1.15);
+  } else {
+    const step = swStrikeStep(S);
+    ks = [];
+    for (let k = Math.round(S*0.85/step)*step; k <= S*1.15; k += step) ks.push(+k.toFixed(2));
+  }
+  ks = ks.sort((a,b) => Math.abs(a-S) - Math.abs(b-S)).slice(0, 21).sort((a,b) => a-b);
+  ssel.innerHTML = '';
+  let atm = ks[0] ?? Math.round(S);
+  for (const k of ks){
+    const o = document.createElement('option');
+    o.value = k; o.textContent = k;
+    ssel.appendChild(o);
+    if (Math.abs(k - S) < Math.abs(atm - S)) atm = k;
+  }
+  ssel.value = (!force && ks.includes(prevK)) ? prevK : atm;
+}
+function swRefreshTicket(){
+  if (!SW) return;
+  const cp = $('swCpSel').value, K = +$('swStrikeSel').value, exp = $('swExpSel').value;
+  if (!K || !exp) return;
+  const q = swQuote(cp, K, exp);
+  $('swQuoteLine').innerHTML = `<b>${SW.t} ${K}${cp} ${exp.slice(5)}</b> &nbsp; bid <b class="dn">${fmt2(q.bid)}</b> × ask <b class="up">${fmt2(q.ask)}</b> &nbsp; <span class="mut">IV ${(q.iv*100).toFixed(0)}%</span>`;
+  $('swGreekLine').textContent = `Δ ${q.delta.toFixed(2)} · Γ ${q.gamma.toFixed(4)} · Θ ${fmt2(q.thetaDay)}/day · ≈$${Math.round(Math.abs(q.thetaDay)*100)}/day per contract`;
+}
+$('swCpSel').addEventListener('change', swRefreshTicket);
+$('swStrikeSel').addEventListener('change', swRefreshTicket);
+$('swExpSel').addEventListener('change', swRefreshTicket);
+
+function swDoTrade(side){
+  if (!SW || SW.done) return;
+  const cp = $('swCpSel').value, K = +$('swStrikeSel').value, exp = $('swExpSel').value;
+  if (!K || !exp) return;
+  const qty = Math.max(1, Math.min(200, Math.round(+$('swQtyInp').value || 1)));
+  const q = swQuote(cp, K, exp);
+  const px = side === 'buy' ? q.ask : q.bid;
+  const cost = px*100*qty + E.FEE*qty;
+  if (side === 'buy' && cost > SW.cash){
+    swCoachSay(`Not enough cash: that costs ${fmt$(cost)} and you have ${fmt$(SW.cash)}.`, 'warn');
+    return;
+  }
+  const key = cp + K + '@' + exp;
+  const pos = SW.positions.get(key) || { cp, K, exp, qty: 0, avg: 0 };
+  const signedQty = side === 'buy' ? qty : -qty;
+  SW.cash += (side === 'buy' ? -(px*100*qty) : px*100*qty) - E.FEE*qty;
+  if (pos.qty === 0 || Math.sign(pos.qty) === Math.sign(signedQty)){
+    pos.avg = (pos.avg*Math.abs(pos.qty) + px*qty)/(Math.abs(pos.qty) + qty);
+    pos.qty += signedQty;
+  } else {
+    const closeQty = Math.min(Math.abs(pos.qty), qty);
+    SW.realized += (px - pos.avg)*100*closeQty*Math.sign(pos.qty);
+    pos.qty += signedQty;
+    if (pos.qty !== 0 && Math.sign(pos.qty) === Math.sign(signedQty)) pos.avg = px;
+  }
+  if (pos.qty === 0) SW.positions.delete(key); else SW.positions.set(key, pos);
+  const lv = swDayLevels(swCurDay());
+  const rec = { i: SW.i, date: swCurDate(), slot: swCurSlot(), side, cp, K, exp, px, qty,
+    S: swSpot(), net: lv.net, flip: lv.flip, cw: lv.callWall, pw: lv.putWall,
+    premium: px*100*qty, isOpen: SW.positions.has(key) };
+  SW.trades.push(rec);
+  if (side === 'buy' && rec.isOpen){ SW.lastBuyI = SW.i; SW.lastPromptDay = swCurDay(); }
+  swAddBlotterRow(rec);
+  swTradeCoach(rec);
+  swRefreshAll();
+}
+$('swBuyBtn').addEventListener('click', () => swDoTrade('buy'));
+$('swSellBtn').addEventListener('click', () => swDoTrade('sell'));
+function swClosePosition(key){
+  const pos = SW.positions.get(key);
+  if (!pos) return;
+  $('swCpSel').value = pos.cp;
+  swPopulateTicket();
+  if (![...$('swExpSel').options].some(o => o.value === pos.exp)){
+    const o = document.createElement('option'); o.value = pos.exp; o.textContent = pos.exp.slice(5); $('swExpSel').appendChild(o);
+  }
+  $('swExpSel').value = pos.exp;
+  if (![...$('swStrikeSel').options].some(o => +o.value === pos.K)){
+    const o = document.createElement('option'); o.value = pos.K; o.textContent = pos.K; $('swStrikeSel').appendChild(o);
+  }
+  $('swStrikeSel').value = pos.K;
+  $('swQtyInp').value = Math.abs(pos.qty);
+  swDoTrade(pos.qty > 0 ? 'sell' : 'buy');
+}
+function swPositionsMark(){
+  let val = 0, rows = [];
+  for (const [key, p] of SW.positions){
+    const q = swQuote(p.cp, p.K, p.exp);
+    const pnl = (q.mid - p.avg)*100*p.qty;
+    val += q.mid*100*p.qty;
+    rows.push({ key, ...p, mark: q.mid, pnl, delta: q.delta*p.qty*100, thetaDay: q.thetaDay*p.qty*100 });
+  }
+  return { val, rows };
+}
+function swPnl(){ return SW.cash + swPositionsMark().val - SW_CASH; }
+
+/* ---------- decision check-in (modal) ---------- */
+function swDecisionPrompt(){
+  setSwSpeed(0);
+  SW._promptsSeen++;
+  const m = swPositionsMark();
+  const held = Math.round((SW.i - SW.lastBuyI)/SW_SLOTS);
+  let rows = m.rows.map(r =>
+    `<tr><td>${SW.t} ${r.K}${r.cp} ${r.exp.slice(5)}</td><td class="num">${r.qty}</td><td class="num">${fmt2(r.avg)}</td><td class="num">${fmt2(r.mark)}</td><td class="num ${r.pnl >= 0 ? 'up' : 'dn'}">${fmt$(r.pnl)}</td></tr>`).join('');
+  $('modalBox').innerHTML = `<h2 style="margin-top:0">Check-in — ${swDow(swCurDate())} ${swCurDate()}</h2>
+    <p class="ink2">A full trading day has passed since your last buy (${held} day${held > 1 ? 's' : ''} in the trade). What's the plan?</p>
+    <table><thead><tr><th>Contract</th><th>Qty</th><th>Avg</th><th>Mark</th><th>P&amp;L</th></tr></thead><tbody>${rows}</tbody></table>
+    <div class="statrow" style="margin-top:10px">
+      <div class="stat"><div class="lab">Open P&amp;L</div><div class="val num ${m.rows.reduce((a,r) => a+r.pnl, 0) >= 0 ? 'up' : 'dn'}">${fmt$(m.rows.reduce((a,r) => a+r.pnl, 0))}</div></div>
+      <div class="stat"><div class="lab">Regime today</div><div class="val num">${(() => { const n = swNetFor(swCurDay()); return n == null ? '—' : (n >= 0 ? '+γ' : '−γ') + ' ' + swFmtCons(n); })()}</div></div>
+    </div>
+    <p style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px">
+      <button class="sell" onclick="swPromptSellAll()">Sell it all</button>
+      <button class="buy" onclick="swPromptBuyMore()">Buy more (open the ticket)</button>
+      <button class="primary" onclick="swPromptResume()">Keep holding ▶</button>
+    </p>
+    <p class="small mut">The check-in repeats after each further full day in the trade. Swing discipline = having a reason to still be in.</p>`;
+  $('modal').classList.add('open');
+}
+function swPromptSellAll(){
+  SW._promptsActed++;
+  closeModal();
+  for (const key of [...SW.positions.keys()]) swClosePosition(key);
+  swCoachSay('Flattened at the check-in. Booking the trade and re-assessing with a clear head is never wrong.', 'good');
+}
+function swPromptBuyMore(){
+  SW._promptsActed++;
+  closeModal();
+  $('swQtyInp').focus();
+  document.querySelector('#tab-swing .ticket').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  swCoachSay('Adding? Make sure it\'s a plan, not a hope: adding to winners with the regime is pressing an edge — averaging down against the regime is how swing accounts die.', 'info');
+}
+function swPromptResume(){
+  closeModal();
+  setSwSpeed(swLastSpeed || 1);
+}
+
+/* ---------- coach ---------- */
+function swCoachSay(html, kind){
+  if (!$('swCoachChk').checked && kind !== 'force') return;
+  const div = document.createElement('div');
+  div.className = 'coachMsg' + (kind === 'warn' ? ' warn' : kind === 'good' ? ' good' : '');
+  div.innerHTML = `<div class="t">${SW ? swDow(swCurDate()) + ' ' + swCurDate() + ' · ' + swSlotClock(swCurSlot()) : ''}</div>${html}`;
+  $('swCoachFeed').prepend(div);
+  while ($('swCoachFeed').children.length > 40) $('swCoachFeed').lastChild.remove();
+}
+function swOpeningBriefing(realCt){
+  const day = swCurDay(), lv = swDayLevels(day), S = swSpot();
+  const n = lv.net;
+  return `<b>Swing briefing — ${SW.t}.</b> You have <b>${day} trading days of look-back</b> and an unknown number of days ahead (up to ${SW.dates.length - day - 1}). ` +
+    `${SW.t} opens at <b>${swFmtPx(S)}</b>. Dealer map: net GEX <b>${n == null ? 'n/a' : swFmtCons(n) + ' cons'}</b>${n != null ? ' — ' + (n >= 0 ? 'positive (stabilizing)' : 'negative (amplifying)') + ' regime' : ''}. ` +
+    `${lv.flip ? 'Gamma flip ≈ <b>' + swFmtPx(lv.flip) + '</b>, ' : ''}call wall <b>${lv.callWall ?? '—'}</b>, put wall <b>${lv.putWall ?? '—'}</b>, magnet <b>${lv.magnet ?? '—'}</b>. ` +
+    `Data honesty: ${realCt} of ${SW.dates.length} days have real 30-min bars (●); the rest reconstruct the intraday path from that day's real OHLC (◐). Daily candles, daily GEX${Object.keys(SW.T.ladders || {}).length ? ' and ' + Object.keys(SW.T.ladders).length + ' cons ladders' : ''} are real. ` +
+    `Pick your expiry, buy a call or a put, and press play — I'll check in with you after each full day in the trade.`;
+}
+function swDayCoach(day){
+  const lv = swDayLevels(day);
+  const prevNet = day > 0 ? swNetFor(day - 1) : null;
+  const net = lv.net;
+  const dow = swDow(SW.dates[day]);
+  if (net != null && prevNet != null && Math.sign(net) !== Math.sign(prevNet)){
+    swCoachSay(`<b>Regime flip overnight:</b> daily net GEX went ${prevNet >= 0 ? 'positive → negative' : 'negative → positive'} (${swFmtCons(net)} cons). ${net < 0 ? 'Amplifying tape: trends extend, vol expands — with-trend entries, wider stops, smaller size.' : 'Stabilizing tape: dips get bought, rallies get faded — mean-reversion entries near the walls work again.'}`, net < 0 ? 'warn' : 'good');
+  }
+  const prevClose = day > 0 ? SW.win[day-1].c : null;
+  if (lv.flip && prevClose && day > 0){
+    const prev2 = day > 1 ? SW.win[day-2].c : null;
+    if (prev2 && ((prev2 > lv.flip && prevClose < lv.flip) || (prev2 < lv.flip && prevClose > lv.flip))){
+      swCoachSay(`<b>Closed ${prevClose < lv.flip ? 'below' : 'above'} the gamma flip (${swFmtPx(lv.flip)}).</b> On swing timeframes a daily close across the flip is the regime signal — intraday pokes are noise, closes are votes.`, prevClose < lv.flip ? 'warn' : 'good');
+    }
+  }
+  for (const [, p] of SW.positions){
+    const dte = Math.round((+new Date(p.exp + 'T12:00:00Z') - +new Date(SW.dates[day] + 'T12:00:00Z'))/86400000);
+    const S = swSpot();
+    const otm = p.cp === 'C' ? S < p.K : S > p.K;
+    if (p.qty > 0 && dte <= 2 && otm){
+      swCoachSay(`<b>${p.K}${p.cp} expires in ${dte} day${dte === 1 ? '' : 's'} and it's OTM.</b> Swing rule: theta on the last 2-3 days is day-trade theta. Roll it out or salvage what's left — hope is not a plan.`, 'warn');
+    } else if (p.qty > 0 && dte <= 5){
+      swCoachEvery('dte5' + p.K + p.cp, 26, () => swCoachSay(`${p.K}${p.cp} ${p.exp}: <b>${dte} DTE</b> — you're entering the fast part of the decay curve. If the thesis needs more time, rolling beats holding.`, 'info'));
+    }
+  }
+  if (dow === 'Fri' && SW.positions.size){
+    swCoachEvery('wkend', 4, () => swCoachSay(`<b>Friday with open premium.</b> You pay ~3 calendar days of theta over the weekend but only get Monday's open in exchange. Pros either trim before the close or make sure the position is worth the toll.`, 'info'));
+  }
+}
+function swCoachEvery(flag, cooldownDays, fn){
+  const last = SW.coachFlags[flag] ?? -1e9;
+  if (swCurDay() - last < cooldownDays) return;
+  SW.coachFlags[flag] = swCurDay();
+  fn();
+}
+function swTradeCoach(rec){
+  const net = rec.net;
+  const longDelta = (rec.side === 'buy') === (rec.cp === 'C');
+  if (!rec.isOpen) return;
+  const d5 = swCurDay() >= 5 ? SW.S[SW.i] - SW.S[SW.i - 5*SW_SLOTS] : 0;
+  const dte = Math.round((+new Date(rec.exp + 'T12:00:00Z') - +new Date(rec.date + 'T12:00:00Z'))/86400000);
+  if (net != null && net < 0){
+    if (longDelta === (d5 >= 0)) swCoachSay(`Trading <b>with</b> the negative-gamma trend (5-day momentum ${d5 >= 0 ? 'up' : 'down'}). Structurally aligned — dealer hedging pushes moves further here. The flip ${rec.flip ? '(' + swFmtPx(rec.flip) + ')' : ''} is your invalidation on a closing basis.`, 'good');
+    else swCoachSay(`<b>Counter-trend entry in negative gamma.</b> You're fighting both the momentum and the dealers' hedging flow. Sometimes it's the bottom — usually it's early. Size like it's usually early.`, 'warn');
+  } else if (net != null && net >= 0){
+    if (rec.cw && rec.cp === 'C' && rec.side === 'buy' && rec.S > rec.cw*0.99 && rec.S <= rec.cw*1.005){
+      swCoachSay(`Buying calls <b>right under the call wall (${rec.cw}) in positive gamma</b> — the same low-EV location as on the day timeframe, but you're paying days of theta for it, not hours.`, 'warn');
+    } else if (rec.pw && rec.cp === 'C' && rec.side === 'buy' && rec.S < rec.pw*1.01){
+      swCoachSay(`Buying the dip at the put wall (${rec.pw}) in positive gamma — the highest-probability support on the map. Textbook swing entry; give it room to the wall's far side and let the regime do the work.`, 'good');
+    }
+  }
+  if (dte <= 5 && rec.side === 'buy') swCoachSay(`<b>${dte} DTE on a swing entry?</b> That's a day trade wearing a swing costume — theta will eat any thesis that needs more than a couple of sessions. 14-45 DTE gives a swing room to breathe.`, 'warn');
+  if (rec.premium > SW_CASH*0.2) swCoachSay(`<b>Size check:</b> ${(rec.premium/SW_CASH*100).toFixed(0)}% of the account in premium on one swing. Multi-day gaps go through stops — most pros risk 1-5% per swing idea.`, 'warn');
+  if (rec.side === 'sell' && (SW.positions.get(rec.cp + rec.K + '@' + rec.exp)?.qty ?? 0) < 0){
+    swCoachSay(`You're <b>short naked ${rec.cp === 'C' ? 'calls' : 'puts'} overnight</b>. Gaps don't care about your stop. In the gym it's a lesson; live it's a margin call.`, 'warn');
+  }
+}
+
+/* ---------- grading & report ---------- */
+function swGrade(){
+  const opens = SW.trades.filter(t => t.isOpen);
+  if (!opens.length) return { total: null };
+  const g = { align: 12.5, loc: 12.5, risk: 20, exit: 15, notes: [] };
+  let alignPts = 0, locPts = 0, n = 0;
+  for (const t of opens){
+    n++;
+    const longDelta = (t.side === 'buy') === (t.cp === 'C');
+    const day = Math.floor(t.i/SW_SLOTS);
+    const d5 = day >= 5 ? SW.S[t.i] - SW.S[t.i - 5*SW_SLOTS] : 0;
+    if (t.net != null && t.net < 0){
+      const withTrend = longDelta === (d5 >= 0);
+      alignPts += withTrend ? 1 : -0.6;
+      if (!withTrend) g.notes.push(`${t.date} — counter-trend ${t.side} ${t.K}${t.cp} in negative gamma.`);
+    } else if (t.net != null){
+      const nearCW = t.cw && Math.abs(t.S - t.cw) < t.S*0.015;
+      const nearPW = t.pw && Math.abs(t.S - t.pw) < t.S*0.015;
+      const fading = (nearCW && !longDelta) || (nearPW && longDelta);
+      const chasing = nearCW && longDelta && t.cp === 'C' && t.side === 'buy';
+      alignPts += fading ? 1 : chasing ? -1 : 0.3;
+      if (chasing) g.notes.push(`${t.date} — bought ${t.K}${t.cp} into the call wall in positive gamma.`);
+      if (fading) g.notes.push(`${t.date} — entry aligned with the walls: textbook positive-gamma swing.`);
+    } else alignPts += 0.3;
+    const nearLvl = (t.cw && Math.abs(t.S - t.cw) < t.S*0.015) || (t.pw && Math.abs(t.S - t.pw) < t.S*0.015) || (t.flip && Math.abs(t.S - t.flip) < t.S*0.015);
+    locPts += nearLvl ? 1 : 0.25;
+    const dte = Math.round((+new Date(t.exp + 'T12:00:00Z') - +new Date(t.date + 'T12:00:00Z'))/86400000);
+    if (dte <= 5){ g.risk -= 3; g.notes.push(`${t.date} — ${dte} DTE is not a swing expiry.`); }
+    if (t.premium > SW_CASH*0.2){ g.risk -= 6; g.notes.push(`${t.date} — position was ${(t.premium/SW_CASH*100).toFixed(0)}% of the account.`); }
+    else if (t.premium > SW_CASH*0.08) g.risk -= 2;
+  }
+  g.align = Math.max(0, Math.min(25, 12.5 + 12.5*alignPts/n));
+  g.loc = Math.max(0, Math.min(25, 25*locPts/n));
+  g.risk = Math.max(0, Math.min(25, g.risk + 5));
+  let exit = 15;
+  if (SW.trades.some(t => !t.isOpen)) exit += 5;
+  if (SW._heldOTM){ exit -= 10; g.notes.push('Held long OTM options all the way to expiry — salvage value beats zero.'); }
+  if (SW._promptsSeen && SW._promptsActed === 0 && SW._promptsSeen >= 3) { exit -= 3; g.notes.push('Sailed through every daily check-in without ever re-deciding.'); }
+  g.exit = Math.max(0, Math.min(25, exit));
+  return { ...g, total: Math.round(g.align + g.loc + g.risk + g.exit) };
+}
+function swShowReport(why, note){
+  const pnl = SW.cash - SW_CASH;
+  const g = swGrade();
+  const daysTraded = swCurDay() - SW.startIdx + 1;
+  let html = `<h2 style="margin-top:0">Swing complete — ${SW.t} (${why})</h2>`;
+  html += `<div class="statrow">
+    <div class="stat"><div class="lab">Swing P&L</div><div class="val num ${pnl >= 0 ? 'up' : 'dn'}">${fmt$(pnl)}</div></div>
+    <div class="stat"><div class="lab">Days played</div><div class="val num">${daysTraded}</div></div>
+    <div class="stat"><div class="lab">Trades</div><div class="val num">${SW.trades.length}</div></div>
+    <div class="stat"><div class="lab">Final</div><div class="val num">${swFmtPx(SW.S[SW.i])}</div></div>
+  </div>`;
+  if (note && note.length) html += `<p class="small mut">Liquidation: ${note.join(' · ')}</p>`;
+  if (g.total === null){
+    html += `<p class="ink2">No positions opened. Watching a regime develop across days is real practice too — but next time, take one setup and manage it through the check-ins.</p>`;
+  } else {
+    html += `<div style="display:flex;gap:22px;align-items:center;margin:14px 0">
+      <div class="gradeBig" style="color:${g.total >= 70 ? 'var(--green)' : g.total >= 55 ? 'var(--yellow)' : 'var(--red)'}">${letter(g.total)}</div>
+      <table class="rubric" style="flex:1">
+        <tr><td>Regime alignment</td><td class="num">${g.align.toFixed(0)}/25</td></tr>
+        <tr><td>Entry location vs levels</td><td class="num">${g.loc.toFixed(0)}/25</td></tr>
+        <tr><td>Risk, sizing & expiry choice</td><td class="num">${g.risk.toFixed(0)}/25</td></tr>
+        <tr><td>Exits & check-in discipline</td><td class="num">${g.exit.toFixed(0)}/25</td></tr>
+      </table></div>`;
+    html += `<p class="small mut">Process grade, not P&L grade.</p>`;
+    if (g.notes.length) html += `<div class="callout"><b>Coach notes</b><br>${g.notes.slice(0,6).join('<br>')}</div>`;
+  }
+  html += `<p style="display:flex;gap:10px"><button class="primary" onclick="closeModal();swNewSession()">New swing</button>
+    <button onclick="closeModal()">Review the chart</button></p>`;
+  $('modalBox').innerHTML = html;
+  $('modal').classList.add('open');
+}
+
+/* ---------- rendering ---------- */
+function swRefreshAll(){
+  if (!SW) return;
+  const day = swCurDay(), lv = swDayLevels(day), S = swSpot();
+  $('swClock').textContent = `${swDow(swCurDate())} ${swCurDate()} · ${swSlotClock(swCurSlot())} ET`;
+  const dayOpen = SW.candles[day*SW_SLOTS].o;
+  const chg = S - dayOpen;
+  $('swSpotLbl').innerHTML = swFmtPx(S) + ` <span class="small ${chg >= 0 ? 'up' : 'dn'}">${chg >= 0 ? '+' : ''}${chg.toFixed(2)}</span>`;
+  const net = lv.net;
+  const badge = $('swRegimeBadge');
+  if (net == null){ badge.textContent = 'GEX n/a'; badge.className = 'badge zero'; }
+  else {
+    badge.textContent = (net >= 0 ? '+' : '−') + ' GAMMA ' + swFmtCons(net).replace(/^[+−]/, '');
+    badge.className = 'badge ' + (net >= 0 ? 'pos' : 'neg');
+  }
+  const src = $('swSrcBadge');
+  if (SW.realDay[day]){ src.textContent = '● real 30m bars'; src.className = 'badge pos'; src.title = 'This day\'s intraday bars are real UW 30-minute candles.'; }
+  else { src.textContent = '◐ recon intraday'; src.className = 'badge zero'; src.title = 'Older than UW\'s ~30-day intraday retention: this day\'s 30-min path is reconstructed from its REAL daily open/high/low/close.'; }
+  $('swNetGexLbl').textContent = net == null ? '—' : swFmtCons(net) + (lv.real ? ' ●' : '');
+  $('swFlipLbl').textContent = lv.flip ? swFmtPx(lv.flip) : '—';
+  $('swCwLbl').textContent = lv.callWall ?? '—';
+  $('swPwLbl').textContent = lv.putWall ?? '—';
+  $('swMagLbl').textContent = lv.magnet ?? '—';
+  $('swCashLbl').textContent = fmt$(SW.cash);
+  const pnl = swPnl();
+  const pl = $('swPnlLbl'); pl.textContent = fmt$(pnl); pl.className = 'val num ' + (pnl >= 0 ? 'up' : 'dn');
+  if (swCurSlot() === 0) swPopulateTicket();
+  swRefreshTicket();
+  swRenderPositions();
+  swDrawPrice();
+  swDrawGexHist();
+}
+function swRenderPositions(){
+  const tb = $('swPosTable').querySelector('tbody');
+  const m = swPositionsMark();
+  tb.innerHTML = '';
+  $('swNoPos').style.display = m.rows.length ? 'none' : '';
+  for (const r of m.rows){
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${r.K}${r.cp} ${r.exp.slice(5)}</td><td class="num">${r.qty}</td><td class="num">${fmt2(r.avg)}</td>
+      <td class="num">${fmt2(r.mark)}</td><td class="num">${r.delta.toFixed(0)}</td><td class="num dn">${r.thetaDay.toFixed(0)}</td>
+      <td class="num ${r.pnl >= 0 ? 'up' : 'dn'}">${fmt$(r.pnl)}</td>
+      <td><button class="small" style="padding:2px 8px" onclick="swClosePosition('${r.key}')">✕</button></td>`;
+    tb.appendChild(tr);
+  }
+}
+function swAddBlotterRow(rec){
+  $('swNoTrades').style.display = 'none';
+  const tb = $('swBlotter').querySelector('tbody');
+  const tr = document.createElement('tr');
+  const ctx = `${rec.net == null ? '' : rec.net >= 0 ? '+γ' : '−γ'}${rec.cw ? ', ' + (rec.cw - rec.S).toFixed(1) + ' to CW' : ''}${rec.pw ? ', ' + (rec.S - rec.pw).toFixed(1) + ' to PW' : ''}`;
+  tr.innerHTML = `<td>${rec.date.slice(5)} ${swSlotClock(rec.slot)}</td><td class="${rec.side === 'buy' ? 'up' : 'dn'}">${rec.side.toUpperCase()}</td>
+    <td>${rec.K}${rec.cp} ${rec.exp.slice(5)}</td><td class="num">${rec.qty}</td><td class="num">${fmt2(rec.px)}</td><td class="mut small">${ctx}</td>`;
+  tb.prepend(tr);
+}
+
+function swAggBars(){
+  // aggregate slots [0..SW.i] into bars of swTf slots, aligned to day boundaries
+  const bars = [];
+  let cur = null;
+  for (let i = 0; i <= SW.i; i++){
+    const slot = i % SW_SLOTS;
+    const cd = SW.candles[i];
+    if (slot % swTf === 0 || slot === 0 || !cur){
+      if (cur) bars.push(cur);
+      cur = { i0: i, i1: i, o: cd.o, h: cd.h, l: cd.l, c: cd.c, day: Math.floor(i/SW_SLOTS) };
+    } else {
+      cur.i1 = i; cur.h = Math.max(cur.h, cd.h); cur.l = Math.min(cur.l, cd.l); cur.c = cd.c;
+    }
+  }
+  if (cur) bars.push(cur);
+  return bars;
+}
+function swDrawPrice(){
+  const cv = $('swPriceCanvas');
+  if (!cv.clientWidth && !cv.parentElement.clientWidth) return;
+  const { ctx, W, H } = setupCanvas(cv, 430);
+  ctx.fillStyle = COL.surface; ctx.fillRect(0, 0, W, H);
+  const day = swCurDay(), lv = swDayLevels(day);
+  const rsiH = swRsiOn ? 74 : 0;
+  const padB = 24 + rsiH, padT = 10;
+  const stripW = 96, labW = 60;
+  const plotW = W - stripW - labW - 8;
+  const bars = swAggBars();
+  const VIEW = Math.min(bars.length, swTf >= 13 ? 130 : 110);
+  const vis = bars.slice(-VIEW);
+  let lo = Infinity, hi = -Infinity;
+  for (const b of vis){ if (b.l < lo) lo = b.l; if (b.h > hi) hi = b.h; }
+  const S0 = SW.S[SW.i];
+  for (const L of [lv.callWall, lv.putWall, lv.flip, lv.magnet]){
+    if (L && Math.abs(L - S0) < S0*0.06){ lo = Math.min(lo, L); hi = Math.max(hi, L); }
+  }
+  const pad = Math.max((hi - lo)*0.08, S0*0.002);
+  lo -= pad; hi += pad;
+  const X = bi => (bi + 0.5)/VIEW*plotW;
+  const Y = p => padT + (hi - p)/(hi - lo)*(H - padT - padB);
+  // horizontal grid
+  const step = niceStep((hi - lo)/6);
+  ctx.strokeStyle = COL.grid; ctx.lineWidth = 1;
+  ctx.fillStyle = COL.muted; ctx.font = '11px system-ui'; ctx.textAlign = 'left';
+  for (let p = Math.ceil(lo/step)*step; p < hi; p += step){
+    ctx.beginPath(); ctx.moveTo(0, Y(p)); ctx.lineTo(plotW, Y(p)); ctx.stroke();
+    ctx.fillText(swFmtPx(p), plotW + 6, Y(p) + 4);
+  }
+  // vertical grid at day starts + date labels
+  ctx.textAlign = 'center';
+  let lastDay = -1, lastLblX = -99;
+  for (let bi = 0; bi < vis.length; bi++){
+    const b = vis[bi];
+    if (b.day !== lastDay){
+      lastDay = b.day;
+      const x = X(bi) - 0.5/VIEW*plotW;
+      ctx.strokeStyle = b.day === SW.startIdx ? COL.yellow : COL.grid;
+      ctx.lineWidth = b.day === SW.startIdx ? 1.6 : 1;
+      if (b.day === SW.startIdx) ctx.setLineDash([5,4]);
+      ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, H - padB); ctx.stroke();
+      ctx.setLineDash([]);
+      if (x - lastLblX > 52){
+        lastLblX = x;
+        ctx.fillStyle = b.day === SW.startIdx ? COL.yellow : COL.muted;
+        ctx.fillText(SW.dates[b.day].slice(5), Math.min(x + 20, plotW - 20), H - padB + 14);
+      }
+    }
+  }
+  ctx.lineWidth = 1;
+  // levels for the current day
+  function levelLine(p, color, dash, label){
+    if (!p || p < lo || p > hi) return;
+    ctx.strokeStyle = color; ctx.lineWidth = 1.6;
+    ctx.setLineDash(dash);
+    ctx.beginPath(); ctx.moveTo(0, Y(p)); ctx.lineTo(plotW, Y(p)); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = color; ctx.font = 'bold 10px system-ui'; ctx.textAlign = 'left';
+    ctx.fillText(label, plotW + 6, Y(p) - 5);
+    ctx.font = '11px system-ui'; ctx.fillStyle = COL.muted;
+  }
+  levelLine(lv.callWall, COL.green, [], 'CW ' + (lv.callWall ?? ''));
+  levelLine(lv.putWall, COL.red, [], 'PW ' + (lv.putWall ?? ''));
+  levelLine(lv.flip, COL.yellow, [2,2], 'FLIP ' + (lv.flip ? swFmtPx(lv.flip) : ''));
+  if (lv.magnet !== lv.callWall && lv.magnet !== lv.putWall) levelLine(lv.magnet, COL.violet, [2,4], 'MAG ' + (lv.magnet ?? ''));
+  // price
+  if (swChartMode === 'candles'){
+    const cwid = Math.max(2, plotW/VIEW*0.62);
+    for (let bi = 0; bi < vis.length; bi++){
+      const b = vis[bi], xc = X(bi);
+      const up = b.c >= b.o;
+      ctx.strokeStyle = up ? COL.green : COL.red;
+      ctx.fillStyle = up ? COL.green : COL.red;
+      ctx.beginPath(); ctx.moveTo(xc, Y(b.h)); ctx.lineTo(xc, Y(b.l)); ctx.stroke();
+      const yT = Y(Math.max(b.o, b.c)), yB = Y(Math.min(b.o, b.c));
+      ctx.fillRect(xc - cwid/2, yT, cwid, Math.max(yB - yT, 1));
+    }
+  } else {
+    ctx.strokeStyle = COL.blue; ctx.lineWidth = 2; ctx.beginPath();
+    for (let bi = 0; bi < vis.length; bi++){
+      const x = X(bi), y = Y(vis[bi].c);
+      bi === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+  // SMAs on aggregated closes (full history; daily tf is seeded with pre-window daily closes)
+  const allCloses = bars.map(b => b.c);
+  let seed = [];
+  if (swTf >= 13){
+    const first = SW.dates[0];
+    seed = SW.T.daily.filter(r => r.date < first).map(r => r.c);
+  }
+  const SMACOL = { 10:'#e0a63d', 20:'#9085e9', 50:'#199e70', 200:'#e66767' };
+  for (const n of [10, 20, 50, 200]){
+    if (!swSmaOn[n] || !allCloses.length) continue;
+    const pre = seed.slice(-Math.min(seed.length, n - 1));
+    const series = pre.concat(allCloses);
+    ctx.strokeStyle = SMACOL[n]; ctx.lineWidth = 1.3; ctx.beginPath();
+    let sum = 0, started = false;
+    const off = bars.length - vis.length;
+    for (let b = 0; b < series.length; b++){
+      sum += series[b];
+      if (b >= n) sum -= series[b - n];
+      const idx = b - pre.length - off;
+      if (idx < 0) continue;
+      const x = X(idx), y = Y(sum/Math.min(n, b + 1));
+      if (y < padT - 20 || y > H - padB + 20){ started = false; continue; }
+      if (!started){ ctx.moveTo(x, y); started = true; } else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+  // RSI pane
+  if (swRsiOn){
+    const rTop = H - padB + 18, rBot = H - 12;
+    ctx.fillStyle = '#161615'; ctx.fillRect(0, rTop - 4, plotW, rBot - rTop + 10);
+    const RY = v => rBot - (v/100)*(rBot - rTop);
+    ctx.strokeStyle = COL.grid; ctx.setLineDash([3,4]);
+    for (const l of [30, 70]){ ctx.beginPath(); ctx.moveTo(0, RY(l)); ctx.lineTo(plotW, RY(l)); ctx.stroke(); }
+    ctx.setLineDash([]);
+    const per = 14;
+    if (allCloses.length > per + 1){
+      let g = 0, l_ = 0;
+      for (let b = 1; b <= per; b++){ const d = allCloses[b] - allCloses[b-1]; if (d >= 0) g += d; else l_ -= d; }
+      let ag = g/per, al = l_/per, lastR = 50, started = false;
+      const off = bars.length - vis.length;
+      ctx.strokeStyle = COL.violet; ctx.lineWidth = 1.4; ctx.beginPath();
+      for (let b = per + 1; b < allCloses.length; b++){
+        const d = allCloses[b] - allCloses[b-1];
+        ag = (ag*(per-1) + Math.max(d, 0))/per;
+        al = (al*(per-1) + Math.max(-d, 0))/per;
+        lastR = al === 0 ? 100 : 100 - 100/(1 + ag/al);
+        const idx = b - off;
+        if (idx < 0) continue;
+        const x = X(idx), y = RY(lastR);
+        if (!started){ ctx.moveTo(x, y); started = true; } else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+      ctx.fillStyle = COL.violet; ctx.font = '9px system-ui'; ctx.textAlign = 'left';
+      ctx.fillText('RSI ' + lastR.toFixed(0), 4, rTop + 6);
+    } else {
+      ctx.fillStyle = COL.muted; ctx.font = '9px system-ui'; ctx.textAlign = 'left';
+      ctx.fillText('RSI: needs ' + (per + 2) + ' bars at this timeframe', 4, rTop + 6);
+    }
+  }
+  // current price dot
+  ctx.fillStyle = COL.blue; ctx.beginPath(); ctx.arc(X(vis.length - 1), Y(SW.S[SW.i]), 3.5, 0, 7); ctx.fill();
+  // trade markers
+  const firstI = vis[0].i0;
+  for (const t of SW.trades){
+    if (t.i < firstI) continue;
+    let bi = vis.findIndex(b => t.i >= b.i0 && t.i <= b.i1);
+    if (bi < 0) continue;
+    const x = X(bi), y = Y(t.S);
+    ctx.fillStyle = t.side === 'buy' ? COL.green : COL.red;
+    ctx.beginPath();
+    if (t.side === 'buy'){ ctx.moveTo(x, y + 9); ctx.lineTo(x - 5, y + 17); ctx.lineTo(x + 5, y + 17); }
+    else { ctx.moveTo(x, y - 9); ctx.lineTo(x - 5, y - 17); ctx.lineTo(x + 5, y - 17); }
+    ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = COL.surface; ctx.lineWidth = 1; ctx.stroke();
+  }
+  // GEX strip (cons units)
+  const sx = W - stripW;
+  ctx.fillStyle = '#161615'; ctx.fillRect(sx, 0, stripW, H - padB + 2);
+  const prof = swStripProfile(day).filter(r => r.k > lo && r.k < hi);
+  const cx = sx + stripW*0.5;
+  ctx.strokeStyle = COL.axis; ctx.beginPath(); ctx.moveTo(cx, padT); ctx.lineTo(cx, H - padB); ctx.stroke();
+  const rowH = Math.max(2, Math.min(8, (H - padT - padB)/Math.max(1, prof.length) - 2));
+  let maxN = 0;
+  for (const r of prof) maxN = Math.max(maxN, Math.abs(r.net));
+  if (!maxN) maxN = 1;
+  for (const r of prof){
+    const y = Y(r.k);
+    const len = Math.max(Math.abs(r.net)/maxN*(stripW*0.46), 1);
+    if (r.net >= 0){ ctx.fillStyle = COL.green; ctx.fillRect(cx + 1, y - rowH/2, len, rowH); }
+    else { ctx.fillStyle = COL.red; ctx.fillRect(cx - 1 - len, y - rowH/2, len, rowH); }
+  }
+  const pos = prof.filter(r => r.net > 0).sort((a,b) => b.net - a.net).slice(0, 4);
+  const neg = prof.filter(r => r.net < 0).sort((a,b) => a.net - b.net).slice(0, 4);
+  ctx.font = 'bold 8px system-ui';
+  for (const r of [...pos, ...neg]){
+    const y = Y(r.k);
+    const lab = swFmtCons(r.net).replace(/^\+/, '');
+    if (r.net >= 0){ ctx.fillStyle = '#9be89b'; ctx.textAlign = 'left'; ctx.fillText(lab, cx + 3, y - rowH/2 - 2); }
+    else { ctx.fillStyle = '#f3b3b3'; ctx.textAlign = 'right'; ctx.fillText(lab, cx - 3, y - rowH/2 - 2); }
+  }
+  ctx.fillStyle = COL.muted; ctx.font = '9px system-ui'; ctx.textAlign = 'center';
+  ctx.fillText(lv.ladder ? '− cons + ●' : '− cons + ◐', cx, H - padB + 14);
+  // spot marker
+  ctx.strokeStyle = COL.blue; ctx.setLineDash([3,3]);
+  ctx.beginPath(); ctx.moveTo(sx, Y(SW.S[SW.i])); ctx.lineTo(W, Y(SW.S[SW.i])); ctx.stroke(); ctx.setLineDash([]);
+  cv._sw = { X, Y, plotW, stripW, vis, lo, hi, rows: prof.map(r => ({ y: Y(r.k), k: r.k, net: r.net })), rowH };
+}
+$('swPriceCanvas').addEventListener('mousemove', e => {
+  const cv = $('swPriceCanvas');
+  if (!SW || !cv._sw) return;
+  const r = cv.getBoundingClientRect();
+  const mx = e.clientX - r.left, my = e.clientY - r.top;
+  const tip = $('swChartTip');
+  if (mx > r.width - cv._sw.stripW){
+    let best = null, bd = (cv._sw.rowH || 8)/2 + 3;
+    for (const row of cv._sw.rows){ const d = Math.abs(row.y - my); if (d < bd){ bd = d; best = row; } }
+    if (!best){ tip.style.display = 'none'; return; }
+    const day = swCurDay();
+    const pc = day > 0 ? SW.win[day-1].c : null;
+    tip.style.display = 'block';
+    tip.style.left = (r.width - cv._sw.stripW - 195) + 'px';
+    tip.style.top = Math.max(4, best.y - 24) + 'px';
+    tip.innerHTML = `<b>${best.k}</b><br>Gamma Exposure <b class="${best.net >= 0 ? 'up' : 'dn'}">${swFmtCons(best.net)}</b> cons` +
+      (pc ? `<br><span class="mut">${(((best.k - pc)/pc)*100).toFixed(2)}% from prev close</span>` : '');
+    return;
+  }
+  if (mx > cv._sw.plotW){ tip.style.display = 'none'; return; }
+  const bi = Math.max(0, Math.min(cv._sw.vis.length - 1, Math.floor(mx/cv._sw.plotW*cv._sw.vis.length)));
+  const b = cv._sw.vis[bi];
+  const net = swNetFor(b.day);
+  tip.style.display = 'block';
+  tip.style.left = Math.min(mx + 14, r.width - 200) + 'px';
+  tip.style.top = (my + 14) + 'px';
+  tip.innerHTML = `<b>${swDow(SW.dates[b.day])} ${SW.dates[b.day]}${swTf < 13 ? ' ' + swSlotClock(b.i1 % SW_SLOTS) : ''}</b><br>` +
+    `O ${swFmtPx(b.o)} H ${swFmtPx(b.h)} L ${swFmtPx(b.l)} C <b>${swFmtPx(b.c)}</b><br>` +
+    `<span class="mut">day net GEX ${net == null ? '—' : swFmtCons(net) + ' cons'} ${SW.realDay[b.day] ? '●' : '◐'}</span>`;
+});
+$('swPriceCanvas').addEventListener('mouseleave', () => { $('swChartTip').style.display = 'none'; });
+
+function swDrawGexHist(){
+  const cv = $('swGexHistCanvas');
+  const { ctx, W, H } = setupCanvas(cv, 90);
+  ctx.fillStyle = COL.surface; ctx.fillRect(0, 0, W, H);
+  const day = swCurDay();
+  const rows = [];
+  for (let d = 0; d <= day; d++){
+    const g = SW.gexByDate.get(SW.dates[d]);
+    rows.push(g ? g.net : null);
+  }
+  const known = rows.filter(v => v != null).map(Math.abs);
+  if (!known.length){
+    ctx.fillStyle = COL.muted; ctx.font = '10px system-ui'; ctx.textAlign = 'center';
+    ctx.fillText('no daily GEX series for this ticker', W/2, H/2);
+    return;
+  }
+  const gMax = Math.max(...known) || 1;
+  const mid = H/2;
+  ctx.strokeStyle = COL.axis; ctx.beginPath(); ctx.moveTo(0, mid); ctx.lineTo(W, mid); ctx.stroke();
+  const bw = Math.max(1, W/rows.length - 0.6);
+  for (let d = 0; d < rows.length; d++){
+    const v = rows[d];
+    if (v == null) continue;
+    const x = (d + 0.5)/rows.length*W;
+    const y = mid - (v/gMax)*(mid - 4);
+    ctx.fillStyle = v >= 0 ? COL.green : COL.red;
+    ctx.fillRect(x - bw/2, Math.min(mid, y), bw, Math.max(Math.abs(y - mid), 1));
+  }
+  const xc = (day + 0.5)/rows.length*W;
+  ctx.strokeStyle = COL.yellow; ctx.setLineDash([3,3]);
+  ctx.beginPath(); ctx.moveTo(xc, 2); ctx.lineTo(xc, H - 2); ctx.stroke(); ctx.setLineDash([]);
+}
+
+/* ---------- tab hook + auto-load ---------- */
+let _swAutoTried = false;
+const _switchTabBase = switchTab;
+switchTab = function(name){
+  _switchTabBase(name);
+  if (name === 'swing') swTabOpened();
+};
+async function swTabOpened(){
+  swAfterDataChange();
+  const have = Object.keys(SWINGDATA.tickers).some(t => (SWINGDATA.tickers[t].daily || []).length >= 45);
+  if (!have && !_swAutoTried && $('supaKey').value.trim()){
+    _swAutoTried = true;
+    $('swLoadStatus').textContent = 'auto-loading from Supabase…';
+    try {
+      const n = await swingLoadAll();
+      $('swLoadStatus').textContent = n ? `loaded ${n} tickers ✓` : 'no swing data in Supabase yet — run the S&P 100 backfill.';
+    } catch (e){ $('swLoadStatus').textContent = 'auto-load failed: ' + e.message; }
+  }
+  if (SW) swRefreshAll();
+}
+window.addEventListener('resize', () => { if (SW && document.querySelector('#tab-swing.active')) { swDrawPrice(); swDrawGexHist(); } });
 
 </script>
 </body>
