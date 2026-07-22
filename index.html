@@ -2601,6 +2601,39 @@ async function uwFetch(key, path){
   throw lastErr;
 }
 
+/* UW ohlc responses include up to THREE rows per period — market_time 'pr'
+   (premarket), 'r' (regular) and 'po' (postmarket) — plus session-aggregate
+   rows. Naively keeping everything triples the daily series and injects a
+   whole-day candle at 9:30. These helpers keep the regular session only. */
+function uwCleanDaily(raw){
+  const rows = (raw || []).map(c => ({ date: (c.date || c.start_time || '').slice(0,10), o:+c.open, h:+c.high, l:+c.low, c:+c.close, mt: c.market_time }))
+    .filter(r => r.date && isFinite(r.c) && r.c > 0);
+  const m = new Map();
+  for (const r of rows){
+    const p = m.get(r.date);
+    const isR = r.mt === 'r', pIsR = !!(p && p.mt === 'r');
+    if (!p || (isR && !pIsR) || (isR === pIsR && (r.h - r.l) >= (p.h - p.l))) m.set(r.date, r);
+  }
+  return [...m.values()].map(r => ({ date: r.date, o: r.o, h: r.h, l: r.l, c: r.c })).sort((a,b) => a.date < b.date ? -1 : 1);
+}
+function uwDedupeDaily(daily){
+  // stored data has no market_time — keep the widest-range row per date (the regular session)
+  const m = new Map();
+  let dup = false;
+  for (const r of (daily || [])){
+    const p = m.get(r.date);
+    if (p) dup = true;
+    if (!p || (r.h - r.l) >= (p.h - p.l)) m.set(r.date, r);
+  }
+  return dup ? [...m.values()].sort((a,b) => a.date < b.date ? -1 : 1) : (daily || []);
+}
+function uwBarDurOk(c, maxMin){
+  // reject session-aggregate rows disguised as bars (e.g. a full-day candle stamped 9:30)
+  if (!c.start_time || !c.end_time) return true;
+  const d = (new Date(c.end_time) - new Date(c.start_time))/60000;
+  return !isFinite(d) || d <= maxMin;
+}
+
 async function runBackfill(){
   const key = $('uwKey').value.trim();
   if (!key){ uwLog('⚠ paste your UW API key first'); return; }
@@ -2638,8 +2671,7 @@ async function runBackfill(){
       // 1) daily candles (also gives us the trading calendar)
       async function pullDaily(sym){
         const dj = await uwFetch(key, `/stock/${sym}/ohlc/1d?limit=550`); reqCount++;
-        return (dj.data || dj).map(c => ({ date: (c.date || c.start_time || '').slice(0,10), o:+c.open, h:+c.high, l:+c.low, c:+c.close }))
-          .filter(r => r.date && isFinite(r.c)).sort((a,b) => a.date < b.date ? -1 : 1);
+        return uwCleanDaily(dj.data || dj);
       }
       try {
         T.daily = await pullDaily(t);
@@ -2711,8 +2743,9 @@ async function runBackfill(){
           for (const size of sizes){
             try {
               const cj = await uwFetch(key, `/stock/${priceT}/ohlc/${size}?date=${date}&limit=2500`); reqCount++;
-              const arr = (cj.data || cj).map(c => {
-                const st = c.start_time || c.market_time || '';
+              const maxDur = { '1m': 2, '5m': 6, '15m': 16 }[size] || 31;
+              const arr = (cj.data || cj).filter(c => (!c.market_time || c.market_time === 'r') && uwBarDurOk(c, maxDur)).map(c => {
+                const st = c.start_time || '';
                 const dt = new Date(st);
                 const et = new Date(dt.toLocaleString('en-US', { timeZone: 'America/New_York' }));
                 const min = (et.getHours() - 9)*60 + et.getMinutes() - 30;
@@ -2896,8 +2929,8 @@ async function supaLoadAll(){
   for (const row of rows){
     const T = UWDATA.tickers[row.ticker] = UWDATA.tickers[row.ticker] || { daily: [], days: {} };
     if (row.day === '1900-01-01'){
-      // meta row: daily OHLC + daily net GEX series
-      if (!T.daily.length && Array.isArray(row.candles)) T.daily = row.candles;
+      // meta row: daily OHLC + daily net GEX series (dedupe: old rows may hold pr/r/po triplets)
+      if (!T.daily.length && Array.isArray(row.candles)) T.daily = uwDedupeDaily(row.candles);
       if ((!T.greekDaily || !T.greekDaily.length) && Array.isArray(row.ladder)) T.greekDaily = row.ladder;
       continue;
     }
@@ -3325,15 +3358,16 @@ async function runSwingBackfill(){
         return null;
       }
     };
-    // 1) daily candles (long history → seeds the 200-day SMA on the daily tf)
-    if (!T.daily.length){
+    // 1) daily candles — ALWAYS refetched (regular session only, deduped by date;
+    //    also heals any earlier pr/r/po-tripled series in memory or Supabase)
+    {
       const dj = await tryFetch(`/stock/${t}/ohlc/1d?limit=550`);
-      if (dj) T.daily = (dj.data || dj).map(r => ({ date: (r.date || r.start_time || '').slice(0,10), o:+r.open, h:+r.high, l:+r.low, c:+r.close }))
-        .filter(r => r.date && isFinite(r.c) && r.c > 0).sort((a,b) => a.date < b.date ? -1 : 1);
+      if (dj) T.daily = uwCleanDaily(dj.data || dj);
+      else if (T.daily.length) T.daily = uwDedupeDaily(T.daily);
     }
     if (!T.daily.length){ uwLog(`${t}: no daily candles — skipped`); failT++; continue; }
-    // 2) daily gamma exposure series (cons units, real for the whole window and beyond)
-    if (!T.gexDaily.length){
+    // 2) daily gamma exposure series (cons units) — always refreshed
+    {
       const gj = await tryFetch(`/stock/${t}/greek-exposure?timeframe=1Y`);
       if (gj) T.gexDaily = (gj.data || gj).map(r => {
         const cg = +(r.call_gamma ?? 0), pgRaw = +(r.put_gamma ?? 0);
@@ -3341,12 +3375,17 @@ async function runSwingBackfill(){
         return { date: (r.date || '').slice(0,10), cg, pg, net: cg + pg };
       }).filter(r => r.date && isFinite(r.net)).sort((a,b) => a.date < b.date ? -1 : 1);
     }
-    // 3) 30-min bars — one pull covers everything UW still retains (~30 trading days)
+    // 3) 30-min bars — one pull covers everything UW retains (~90+ trading days at 30m).
+    //    Regular-session bars only; session-aggregate rows (a full-day candle stamped
+    //    9:30) are rejected by the duration guard. Days present in this pull REPLACE
+    //    whatever was stored for them, healing earlier contaminated captures.
     const cj = await tryFetch(`/stock/${t}/ohlc/30m?limit=2500`);
     if (cj){
-      let kept = 0;
+      const fresh = {};
       for (const r of (cj.data || cj)){
-        const st = r.start_time || r.market_time || r.date || '';
+        if (r.market_time && r.market_time !== 'r') continue;
+        if (!uwBarDurOk(r, 31)) continue;
+        const st = r.start_time || r.date || '';
         const dt = new Date(st);
         if (isNaN(+dt)) continue;
         const et = new Date(dt.toLocaleString('en-US', { timeZone: 'America/New_York' }));
@@ -3354,10 +3393,10 @@ async function runSwingBackfill(){
         if (mins < 0 || mins >= 390 || mins % 30 !== 0) continue;
         const slot = mins/30;
         const dkey = `${et.getFullYear()}-${String(et.getMonth()+1).padStart(2,'0')}-${String(et.getDate()).padStart(2,'0')}`;
-        const arr = T.slots[dkey] = T.slots[dkey] || [];
-        if (!arr.some(x => x[0] === slot)){ arr.push([slot, +r.open, +r.high, +r.low, +r.close]); kept++; }
+        const arr = fresh[dkey] = fresh[dkey] || [];
+        if (!arr.some(x => x[0] === slot)) arr.push([slot, +r.open, +r.high, +r.low, +r.close]);
       }
-      for (const d of Object.keys(T.slots)) T.slots[d].sort((a,b) => a[0]-b[0]);
+      for (const d of Object.keys(fresh)) T.slots[d] = fresh[d].sort((a,b) => a[0]-b[0]);
     }
     // 4) per-strike cons ladders for the newest ~32 window days (older 404s are expected — retention)
     const winDates = T.daily.slice(-SW_WINDOW).map(r => r.date);
@@ -3418,7 +3457,7 @@ async function swingLoadAll(){
   for (const row of rows){
     const cur = SWINGDATA.tickers[row.ticker] || {};
     SWINGDATA.tickers[row.ticker] = {
-      daily: (cur.daily && cur.daily.length) ? cur.daily : (row.daily || []),
+      daily: uwDedupeDaily((cur.daily && cur.daily.length) ? cur.daily : (row.daily || [])),
       slots: Object.assign({}, row.slots || {}, cur.slots || {}),
       gexDaily: (cur.gexDaily && cur.gexDaily.length) ? cur.gexDaily : (row.gex_daily || []),
       ladders: Object.assign({}, row.ladders || {}, cur.ladders || {})
@@ -3428,6 +3467,11 @@ async function swingLoadAll(){
   return rows.length;
 }
 function swAfterDataChange(){
+  // sanitize: older captures/files may hold pr/r/po-tripled daily series
+  for (const t of Object.keys(SWINGDATA.tickers)){
+    const T = SWINGDATA.tickers[t];
+    if (T.daily && T.daily.length) T.daily = uwDedupeDaily(T.daily);
+  }
   const tk = Object.keys(SWINGDATA.tickers).filter(t => (SWINGDATA.tickers[t].daily || []).length >= 45).sort();
   const sel = $('swTickerSel');
   const prev = sel.value;
